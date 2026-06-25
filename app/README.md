@@ -14,12 +14,13 @@ PDF/Excel exports) is ported from the original `operating-plan-tracker v5.html`.
 Only the data layer was rebuilt — every create/edit/delete now writes straight
 to Postgres and is broadcast to all other users.
 
-> **Already have it running? To pick up the latest changes** (self-service
-> sign-up, Deleted tab, automatic status/target dates, checkpoint health &
-> categories): in the Supabase **SQL editor** run **`supabase/upgrade.sql`**
-> once, then turn **ON** "Allow new users to sign up" and **OFF** "Confirm
-> email" under **Authentication**. Vercel redeploys the frontend automatically
-> when you push. That's it.
+> **Already have it running? To pick up the latest changes** (Deleted tab,
+> automatic status/target dates, checkpoint health & categories, approved-people
+> picker, checkpoint owners, Phase removed, admin-only sign-in): in the Supabase
+> **SQL editor** run **`supabase/upgrade.sql`** once, then under
+> **Authentication** turn **OFF** "Allow new users to sign up" and **OFF**
+> "Confirm email", and create your users under **Authentication → Users**.
+> Vercel redeploys the frontend automatically when you push.
 
 ---
 
@@ -49,25 +50,20 @@ the browser, refresh, redeploy — the data is in Postgres, untouched.
    - **Project URL** (e.g. `https://abcd1234.supabase.co`)
    - **anon public** key
 
-### 2. Set up self-service sign-up (email + password, no manual approval)
-This app uses email + password with **self-service sign-up restricted to
-authorized people**. No confirmation emails are sent, and you never have to
-approve anyone by hand — a database rule only lets authorized emails register.
+### 2. Set up sign-in (admin-created accounts only — no public sign-up)
+Only you (the admin) create accounts. The login page has **no sign-up option**;
+users can only log in with credentials you give them.
 
 1. **Authentication → Providers → Email**: make sure **Email** is enabled and
-   turn **ON** "Allow new users to sign up".
+   turn **OFF** "Allow new users to sign up" (this blocks public self-registration).
 2. **Authentication → Sign In / Up** (or **Settings**): turn **OFF**
-   "Confirm email" so new accounts work instantly without any email.
-3. The signup restriction is created by the SQL in step 1 (`schema.sql`) — it
-   only allows emails on your company domain (default `sigulerguff.com`) plus
-   anything you add to the `allowed_emails` table. **Edit that domain** in
-   `schema.sql` (function `enforce_allowed_signup`) before running it if your
-   domain differs.
-
-Now anyone with an authorized email opens the app, clicks **"First time here?
-Create your account"**, sets a password, and is in immediately. To authorize an
-outside collaborator, add their email:
-`insert into public.allowed_emails (email) values ('name@partner.com');`
+   "Confirm email" so accounts you create work instantly without any email.
+3. **Create each account**: **Authentication → Users → Add user → Create new
+   user**. Enter the person's **email** and a **password**, and tick **Auto
+   Confirm User**. Share each person's email + password with them privately.
+   - To reset someone's password, edit their user here. To remove access,
+     delete the user here. Normal users can do neither — only people with access
+     to your Supabase project can manage accounts.
 
 ### 3. Deploy the frontend on Vercel
 1. Push this repo to GitHub (already done if you're reading this there).

@@ -117,26 +117,12 @@ begin
 end $$;
 
 -- ============================================================================
---  Self-service signup, restricted to authorized people (no manual approval)
---  Users can create their own account, but ONLY if their email is on the
---  company domain or has been added to allowed_emails. Everyone else is
---  rejected automatically — the app never becomes public.
+--  Access control: ADMIN-ONLY accounts (no public sign-up)
+--  In the Supabase dashboard: Authentication -> Providers -> Email, turn OFF
+--  "Allow new users to sign up". Create each user under Authentication -> Users.
+--  The app's login screen has no sign-up option, and RLS already restricts all
+--  data to signed-in users only. No signup trigger is used; this also removes
+--  any earlier one so it can't block admin-created accounts.
 -- ============================================================================
-create table if not exists public.allowed_emails ( email text primary key );
-
--- >>> EDIT THIS to your company's email domain <<<
-create or replace function public.enforce_allowed_signup()
-returns trigger language plpgsql security definer as $$
-declare allowed_domain text := 'sigulerguff.com';
-begin
-  if lower(split_part(new.email, '@', 2)) = allowed_domain
-     or exists (select 1 from public.allowed_emails where lower(email) = lower(new.email)) then
-    return new;
-  end if;
-  raise exception 'This email is not authorized to use this app.';
-end $$;
-
 drop trigger if exists enforce_allowed_signup on auth.users;
-create trigger enforce_allowed_signup
-  before insert on auth.users
-  for each row execute function public.enforce_allowed_signup();
+drop function if exists public.enforce_allowed_signup();

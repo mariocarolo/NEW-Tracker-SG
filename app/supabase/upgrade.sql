@@ -34,28 +34,12 @@ do $$ begin
     for all to authenticated using (true) with check (true);
 exception when duplicate_object then null; end $$;
 
--- 2) Self-service signup, restricted to authorized people ---------------------
-create table if not exists public.allowed_emails ( email text primary key );
-
--- >>> EDIT 'sigulerguff.com' if your company domain is different <<<
-create or replace function public.enforce_allowed_signup()
-returns trigger language plpgsql security definer as $$
-declare allowed_domain text := 'sigulerguff.com';
-begin
-  if lower(split_part(new.email, '@', 2)) = allowed_domain
-     or exists (select 1 from public.allowed_emails where lower(email) = lower(new.email)) then
-    return new;
-  end if;
-  raise exception 'This email is not authorized to use this app.';
-end $$;
-
+-- 2) Access control: ADMIN-ONLY accounts (no public sign-up) -----------------
+--    Remove any self-signup trigger from earlier so it can't block the accounts
+--    you create yourself. In the dashboard, turn OFF "Allow new users to sign
+--    up" and create each user under Authentication -> Users.
 drop trigger if exists enforce_allowed_signup on auth.users;
-create trigger enforce_allowed_signup
-  before insert on auth.users
-  for each row execute function public.enforce_allowed_signup();
-
--- To authorize someone OUTSIDE your domain, add their email here, e.g.:
---   insert into public.allowed_emails (email) values ('partner@example.com');
+drop function if exists public.enforce_allowed_signup();
 
 -- 3) Reset start dates so topics begin as "Not started" ----------------------
 --    (Skip this block if you have already started topics you want to keep.)

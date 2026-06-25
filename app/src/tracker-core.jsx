@@ -103,6 +103,17 @@ const CSS = `
 .pm .del-title { font-size:14px; color:var(--ink); }
 .pm .del-sub { font-size:11px; color:var(--ink-soft); margin-top:2px; }
 .pm .linklike { background:none; border:none; color:#5b6aa8; font-size:12px; cursor:pointer; padding:8px 0 0; text-decoration:underline; align-self:center; }
+.pm .ppick { position:relative; width:100%; min-width:180px; }
+.pm .ppick-input { width:100%; border:1px solid var(--line); background:var(--card); padding:6px 9px; border-radius:7px; font-size:13px; }
+.pm .ppick-input:focus { outline:1px solid #b6bdd3; }
+.pm .ppick-menu { position:absolute; z-index:50; top:calc(100% + 4px); left:0; min-width:220px; max-height:240px; overflow:auto; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 10px 26px rgba(0,0,0,.14); padding:4px; }
+.pm .ppick-opt { display:block; width:100%; text-align:left; background:none; border:none; padding:7px 9px; font-size:13px; border-radius:6px; cursor:pointer; color:var(--ink); }
+.pm .ppick-opt:hover { background:#f3f1ea; }
+.pm .ppick-custom { border-top:1px solid var(--line-soft); margin-top:4px; color:var(--ink-soft); font-style:italic; }
+.pm .ppick-empty { padding:7px 9px; font-size:12px; color:var(--ink-soft); }
+.pm .cp-pic { width:168px; flex-shrink:0; }
+.pm .cp-pic .ppick { min-width:0; }
+.pm .cp-pic .ppick-input { font-size:11px; padding:4px 7px; }
 .pm .icon-btn { color:var(--idle); display:flex; padding:4px; border-radius:5px; transition:color .12s,background .12s; }
 .pm .icon-btn:hover { color:var(--block); background:#fff; }
 
@@ -406,6 +417,13 @@ const STATUSES = [
 // Checkpoint categories (user-selectable).
 const CP_CATEGORIES = ["Planning", "Execution", "Delivery"];
 
+// Approved people for PIC / Co-responsible / checkpoint owner, sorted by first name.
+const PEOPLE = [
+  "Alexandre Mauad", "Bernardo Piquet", "Carla Biasi", "Cesar Collier", "Daniel Vieira",
+  "Elisangela Oliveira", "Guilherme Martins", "John Ging", "Lorenzo Rique", "Luisa Reis",
+  "Luiza de Munno", "Manoel Tavares", "Marcos Tage", "Mario Carolo", "Pedro Aranha",
+].sort((a, b) => a.localeCompare(b));
+
 // Automated checkpoint health, derived from the checkpoint date vs today.
 // Done checkpoints are concluded and have no health badge.
 function cpHealth(cp) {
@@ -661,6 +679,42 @@ function withSnapshot(d) {
 }
 
 /* ============================== Initiative ============================== */
+/* Combobox for choosing an approved person, with partial-match autocomplete and
+   a "Custom" option at the bottom for typing any other name. */
+function PersonPicker({ value, onChange, placeholder = "Select…" }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  const text = value || "";
+  const filter = (q || "").toLowerCase();
+  const matches = PEOPLE.filter((n) => n.toLowerCase().includes(filter));
+  return (
+    <div className="ppick" ref={ref}>
+      <input className="ppick-input" value={text} placeholder={placeholder}
+        onFocus={() => { setQ(""); setOpen(true); }}
+        onChange={(e) => { onChange(e.target.value); setQ(e.target.value); setOpen(true); }} />
+      {open && (
+        <div className="ppick-menu">
+          {matches.map((n) => (
+            <button type="button" className="ppick-opt" key={n}
+              onMouseDown={(e) => { e.preventDefault(); onChange(n); setOpen(false); setQ(""); }}>{n}</button>
+          ))}
+          {matches.length === 0 && <div className="ppick-empty">No matching approved name</div>}
+          <button type="button" className="ppick-opt ppick-custom"
+            onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>
+            Custom — keep “{text || "type a name above"}”
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoint, onDeleteNote, ask }) {
   const [open, setOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
@@ -685,7 +739,6 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
             {item.status === "done" && item.completedAt
               ? <span style={{ color: "var(--done)" }}><CheckCircle2 size={11} style={{ verticalAlign: -1 }} /> done {fmtShort(item.completedAt)}</span>
               : <span><Calendar size={11} style={{ verticalAlign: -1 }} /> due {fmtShort(item.due)}</span>}
-            <span>Phase {item.phase}</span>
           </div>
         </div>
         <span className="rag-dot" style={{ background: rg.c }}
@@ -703,23 +756,15 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
           <div className="field-row">
             <div className="field">
               <label>Person in charge (PIC)</label>
-              <input list="pm-owners" value={item.owner} placeholder="Assign PIC…"
-                onChange={(e) => set({ owner: e.target.value })} />
+              <PersonPicker value={item.owner} onChange={(v) => set({ owner: v })} placeholder="Assign PIC…" />
             </div>
             <div className="field">
               <label>Co-responsible</label>
-              <input list="pm-owners" value={item.owner2 || ""} placeholder="Optional…"
-                onChange={(e) => set({ owner2: e.target.value })} />
+              <PersonPicker value={item.owner2 || ""} onChange={(v) => set({ owner2: v })} placeholder="Optional…" />
             </div>
             <div className="field">
               <label>Status (automatic)</label>
               <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16", alignSelf: "flex-start" }}>{st.l}</span>
-            </div>
-            <div className="field">
-              <label>Phase</label>
-              <select value={item.phase} onChange={(e) => set({ phase: Number(e.target.value) })}>
-                {[1, 2, 3].map((n) => <option key={n} value={n}>Phase {n}</option>)}
-              </select>
             </div>
             <div className="field">
               <label>Start date</label>
@@ -755,6 +800,7 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
                   {c.done ? <CheckCircle2 size={18} /> : <Circle size={18} />}
                 </button>
                 <input className="cp-label" value={c.label} onChange={(e) => setCp(c.id, { label: e.target.value })} />
+                <div className="cp-pic"><PersonPicker value={c.pic || ""} onChange={(v) => setCp(c.id, { pic: v })} placeholder="Person in charge…" /></div>
                 <select className="cp-cat" value={c.category || "Planning"} onChange={(e) => setCp(c.id, { category: e.target.value })}>
                   {CP_CATEGORIES.map((k) => <option key={k} value={k}>{k}</option>)}
                 </select>
@@ -773,7 +819,7 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
           })}
           <div className="add-row">
             <button className="btn ghost" onClick={() =>
-              set({ checkpoints: [...item.checkpoints, { id: uid(), label: "New checkpoint", date: todayISO(), done: false, category: "Planning" }] })}>
+              set({ checkpoints: [...item.checkpoints, { id: uid(), label: "New checkpoint", date: todayISO(), done: false, category: "Planning", pic: item.owner || "" }] })}>
               <Plus size={13} /> Add checkpoint
             </button>
           </div>
@@ -1032,26 +1078,26 @@ function Overview({ data }) {
       </div>
 
       <div className="card panel" style={{ marginTop: 18 }}>
-        <h3>Accomplishments by phase</h3>
-        <div className="ph">What's done — and what's still open — in each phase</div>
-        {[1, 2, 3].map((ph) => {
-          const items = all.filter((it) => it.phase === ph);
+        <h3>Accomplishments by workstream</h3>
+        <div className="ph">What's done — and what's still open — in each workstream</div>
+        {data.cats.map((c) => {
+          const items = c.items;
           const doneItems = items.filter((it) => it.status === "done");
           const openCount = items.length - doneItems.length;
           const pc = items.length ? Math.round((doneItems.length / items.length) * 100) : 0;
           return (
-            <div className="prio-block" key={ph}>
+            <div className="prio-block" key={c.id}>
               <div className="prio-head">
-                <GanttChartSquare size={13} style={{ color: "var(--ink-soft)" }} />
-                <span className="prio-name">Phase {ph}</span>
-                <div className="bar" style={{ width: 120, flex: "none" }}><i style={{ width: `${pc}%`, background: "var(--ink)" }} /></div>
+                <span className="swatch" style={{ background: c.color }} />
+                <span className="prio-name">{c.name}</span>
+                <div className="bar" style={{ width: 120, flex: "none" }}><i style={{ width: `${pc}%`, background: c.color }} /></div>
                 <span className="prio-count">{doneItems.length} done · {openCount} open</span>
               </div>
               {doneItems.length === 0
-                ? <div className="prio-none">Nothing completed yet in this phase.</div>
+                ? <div className="prio-none">Nothing completed yet in this workstream.</div>
                 : <div className="prio-list">
                     {doneItems.map((it) => (
-                      <span className="acc-chip" key={it.id} title={it.cat.name}>
+                      <span className="acc-chip" key={it.id} title={c.name}>
                         <Trophy size={11} style={{ color: "var(--done)" }} /> {it.title}
                       </span>
                     ))}
@@ -1077,35 +1123,40 @@ function Overview({ data }) {
   );
 }
 function Schedule({ data }) {
-  const start = parse(data.start);
-  const phases = [1, 2, 3].map((p) => {
-    const pStart = addMonths(start, (p - 1) * PHASE_LEN);
-    const pEnd = addDays(addMonths(pStart, PHASE_LEN), -1);
-    const items = data.cats.flatMap((c) => c.items.filter((it) => it.phase === p).map((it) => ({ ...it, color: c.color })));
-    return { p, pStart, pEnd, items, span: pEnd.getTime() - pStart.getTime() };
-  });
+  // Global time window spanning the plan start and every checkpoint date.
+  const allDates = data.cats.flatMap((c) => c.items.flatMap((it) => it.checkpoints.map((cp) => cp.date))).filter(Boolean);
+  const planStart = parse(data.start);
+  let startD = planStart, endD = addMonths(planStart, 3);
+  if (allDates.length) {
+    const minISO = allDates.reduce((m, d) => (d < m ? d : m));
+    const maxISO = allDates.reduce((m, d) => (d > m ? d : m));
+    startD = parse(minISO) < planStart ? parse(minISO) : planStart;
+    endD = parse(maxISO) > endD ? parse(maxISO) : endD;
+  }
+  const span = Math.max(1, endD.getTime() - startD.getTime());
 
   return (
     <>
       <div className="toolbar"><span className="ph" style={{ marginTop: 4 }}>
-        Suggested rollout across four quarterly phases from {fmt(data.start)}. Drag dates in the Board to adjust.
+        Timeline of every checkpoint by workstream, from {fmt(iso(startD))} to {fmt(iso(endD))}.
       </span></div>
-      {phases.map((ph) => (
-        <div className="phase" key={ph.p}>
+      {data.cats.map((cat) => (
+        <div className="phase" key={cat.id}>
           <div className="phase-head">
-            <h2>Phase {ph.p}</h2>
-            <span className="span">{fmt(iso(ph.pStart))} — {fmt(iso(ph.pEnd))} · {ph.items.length} topics</span>
+            <span className="swatch" style={{ background: cat.color }} />
+            <h2>{cat.name}</h2>
+            <span className="span">{cat.items.length} topics</span>
           </div>
           <div className="card">
-            {ph.items.length === 0 && <div className="empty">No topics in this phase.</div>}
-            {ph.items.map((it) => (
+            {cat.items.length === 0 && <div className="empty">No topics in this workstream.</div>}
+            {cat.items.map((it) => (
               <div className="rail-row" key={it.id}>
-                <div className="rail-label"><span className="swatch" style={{ background: it.color }} />{it.title}</div>
+                <div className="rail-label"><span className="swatch" style={{ background: cat.color }} />{it.title}</div>
                 <div className="rail">
                   <div className="rail-line" />
                   {it.checkpoints.map((cp) => {
-                    let pos = ((parse(cp.date).getTime() - ph.pStart.getTime()) / ph.span) * 100;
-                    pos = Math.max(3, Math.min(97, pos));
+                    let pos = ((parse(cp.date).getTime() - startD.getTime()) / span) * 100;
+                    pos = Math.max(2, Math.min(98, pos));
                     return (
                       <div className={`node${cp.done ? " done" : ""}`} key={cp.id} style={{ left: `${pos}%` }} title={`${cp.label} · ${fmt(cp.date)}`}>
                         <span className="ball" />
@@ -1161,41 +1212,35 @@ function exportExcel(data) {
     sAoa.push(["Workstream", "Progress", "Done", "Total"]);
     const wsStart = sAoa.length;
     data.cats.forEach((c) => sAoa.push([c.name, weightedPct(c.items) / 100, c.items.filter((it) => it.status === "done").length, c.items.length]));
-    sAoa.push([]);
-    sAoa.push(["Accomplishments by phase"]);
-    sAoa.push(["Phase", "Done", "Open", "Completion"]);
-    const prioStart = sAoa.length;
-    [1, 2, 3].forEach((ph) => { const items = all.filter((it) => it.phase === ph); const d = items.filter((it) => it.status === "done").length; sAoa.push(["Phase " + ph, d, items.length - d, items.length ? d / items.length : 0]); });
     const wsS = XLSX.utils.aoa_to_sheet(sAoa);
     wsS["!cols"] = [{ wch: 36 }, { wch: 12 }, { wch: 10 }, { wch: 10 }];
     setZ(wsS, overallRow, 1, "0%");
     for (let i = 0; i < data.cats.length; i++) setZ(wsS, wsStart + i, 1, "0%");
-    for (let i = 0; i < 3; i++) setZ(wsS, prioStart + i, 3, "0%");
 
     /* ---- Topics ---- */
-    const tHead = ["Workstream", "Topic", "PIC", "Co-responsible", "Status", "Health", "Phase", "Progress", "Start", "Target date", "Completed", "Checkpoints", "Overdue", "Notes"];
+    const tHead = ["Workstream", "Topic", "PIC", "Co-responsible", "Status", "Health", "Progress", "Start", "Target date", "Completed", "Checkpoints", "Overdue", "Notes"];
     const tRows = all.map((it) => [
       it.cat.name, it.title, it.owner || "", it.owner2 || "", stL(it.status),
       RAG[healthOf(it)].l + (it.health && it.health !== "auto" ? " (manual)" : ""),
-      it.phase, pctOf(it) / 100, fmt(it.start), fmt(it.due),
+      pctOf(it) / 100, fmt(it.start), fmt(it.due),
       it.status === "done" && it.completedAt ? fmt(it.completedAt) : "",
       `${cpDone(it)} / ${it.checkpoints.length}`, overdueCp(it), it.notes ? it.notes.length : 0,
     ]);
     const wsT = XLSX.utils.aoa_to_sheet([tHead, ...tRows]);
-    wsT["!cols"] = [{ wch: 26 }, { wch: 50 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 19 }, { wch: 6 }, { wch: 9 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 8 }, { wch: 7 }];
-    fmtPctCol(wsT, 7, tRows.length);
+    wsT["!cols"] = [{ wch: 26 }, { wch: 50 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 19 }, { wch: 9 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 8 }, { wch: 7 }];
+    fmtPctCol(wsT, 6, tRows.length);
     wsT["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: tRows.length, c: tHead.length - 1 } }) };
 
     /* ---- Checkpoints ---- */
-    const cHead = ["Workstream", "Topic", "Assignees", "Checkpoint", "Date", "Status", "Days late"];
+    const cHead = ["Workstream", "Topic", "Checkpoint", "Person in charge", "Category", "Date", "Status", "Days late"];
     const cRows = [];
     all.forEach((it) => it.checkpoints.forEach((cp) => cRows.push([
-      it.cat.name, it.title, assignLabel(it), cp.label, fmt(cp.date),
+      it.cat.name, it.title, cp.label, cp.pic || "", cp.category || "", fmt(cp.date),
       cp.done ? "Done" : (cp.date < today ? "Overdue" : "Pending"),
       !cp.done && cp.date < today ? dayGap(cp.date, today) : "",
     ])));
     const wsC = XLSX.utils.aoa_to_sheet([cHead, ...cRows]);
-    wsC["!cols"] = [{ wch: 26 }, { wch: 46 }, { wch: 16 }, { wch: 34 }, { wch: 15 }, { wch: 10 }, { wch: 9 }];
+    wsC["!cols"] = [{ wch: 26 }, { wch: 46 }, { wch: 34 }, { wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 10 }, { wch: 9 }];
     wsC["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: cRows.length, c: cHead.length - 1 } }) };
 
     /* ---- People ---- */
@@ -1295,7 +1340,7 @@ function BoardReport({ data, onClose }) {
                     <span className="rag-dot" style={{ background: RAG[h].c, flexShrink: 0 }} />
                     <span style={{ flex: 1 }}>{it.title}</span>
                     <span className="tag">{assignLabel(it)}</span>
-                    <span className="tag">Ph {it.phase} · {pctOf(it)}%</span>
+                    <span className="tag">{pctOf(it)}%</span>
                     <span className="tag">{stL(it.status)} · {it.status === "done" && it.completedAt ? "done " + fmtShort(it.completedAt) : "due " + fmtShort(it.due)}</span>
                   </div>
                 );
@@ -2151,7 +2196,6 @@ function DeletedView({ data, restore }) {
 function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState("signin"); // signin | signup
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -2159,13 +2203,11 @@ function Auth() {
     e.preventDefault();
     if (!email.trim() || !password) return;
     setBusy(true); setErr("");
-    const creds = { email: email.trim(), password };
-    const { error } = mode === "signup"
-      ? await supabase.auth.signUp(creds)
-      : await supabase.auth.signInWithPassword(creds);
+    // Sign-in only. Accounts are created by the administrator in Supabase;
+    // there is no self-service sign-up.
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setBusy(false);
     if (error) setErr(error.message);
-    // On success the onAuthStateChange listener signs the user straight in.
   };
 
   return (
@@ -2175,30 +2217,22 @@ function Auth() {
         <div className="connect-card">
           <h1>Operating Plan</h1>
           <div className="connect-sub">Implementation Tracker</div>
-          <p className="connect-text">
-            {mode === "signup"
-              ? "Create your account with your work email. Only authorized addresses are allowed."
-              : "Sign in with your work email and password."}
-          </p>
+          <p className="connect-text">Sign in with the email and password your administrator gave you.</p>
           <form className="connect-actions" onSubmit={submit} style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
             <input
               type="email" required value={email} placeholder="you@company.com" autoComplete="username"
               onChange={(e) => setEmail(e.target.value)}
               style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
             <input
-              type="password" required value={password} placeholder={mode === "signup" ? "Choose a password" : "Password"}
-              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+              type="password" required value={password} placeholder="Password" autoComplete="current-password"
               onChange={(e) => setPassword(e.target.value)}
               style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
             <button className="btn" type="submit" disabled={busy}>
-              {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+              {busy ? "Signing in…" : "Sign in"}
             </button>
           </form>
           {err && <div className="connect-note" style={{ color: "var(--block)" }}>{err}</div>}
-          <button className="linklike" type="button" onClick={() => { setErr(""); setMode(mode === "signup" ? "signin" : "signup"); }}>
-            {mode === "signup" ? "Already have an account? Sign in" : "First time here? Create your account"}
-          </button>
-          <div className="connect-fine">Access is limited to authorized team members.</div>
+          <div className="connect-fine">Access is limited to team members. Accounts are created by the administrator.</div>
         </div>
       </div>
     </div>
@@ -2238,14 +2272,6 @@ function Tracker({ session }) {
     return <div className="pm"><style>{CSS}</style><div className="connect-wrap"><div className="connect-card"><h1>Operating Plan</h1><p className="connect-text">The database has no data yet. Run <code>supabase/schema.sql</code> then <code>supabase/seed.sql</code> in the Supabase SQL editor to load the starting plan.</p></div></div></div>;
   }
 
-  const reseed = () => {
-    ask("Reset to the original suggested plan? This clears all edits, owners, and notes. (Progress history and activity log are kept.)", () => {
-      update((d) => withSnapshot({
-        ...buildSeed(d.start), history: d.history,
-        activity: [...(d.activity || []), ev("reset", "", "Reset plan to the suggested template")].slice(-MAX_ACTIVITY),
-      }));
-    }, { danger: true, confirmLabel: "Reset plan" });
-  };
   const setStart = (s) => {
     ask(`Regenerate all suggested dates from ${fmtShort(s)}? Owners, statuses, notes and history are kept; checkpoint dates are recomputed.`, () => {
       update((d) => {
@@ -2280,7 +2306,6 @@ function Tracker({ session }) {
             <div className="startbar">
               <span>Plan start</span>
               <input type="date" value={data.start} onChange={(e) => setStart(e.target.value)} />
-              <button className="btn ghost" onClick={reseed} title="Reset to suggested plan"><RotateCcw size={12} /> Reset</button>
             </div>
           </div>
           <div className="tabs">
