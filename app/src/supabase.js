@@ -7,7 +7,9 @@ import { createClient } from "@supabase/supabase-js";
 // and (for the URL) any trailing slash or path — a trailing slash makes Supabase
 // reject requests with "Invalid path specified in request URL".
 const clean = (v) => (v || "").trim().replace(/^['"]+|['"]+$/g, "").trim();
-const url = clean(import.meta.env.VITE_SUPABASE_URL).replace(/\/+$/, "");
+const url = clean(import.meta.env.VITE_SUPABASE_URL)
+  .replace(/\/(rest|auth|storage|realtime)\/v1\/?$/i, "") // drop a service path if pasted by mistake
+  .replace(/\/+$/, "");                                    // drop any trailing slash
 const anonKey = clean(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 if (!url || !anonKey) {
