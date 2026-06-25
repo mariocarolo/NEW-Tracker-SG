@@ -1967,23 +1967,20 @@ function useTracker() {
   return { data, status, savedAt, update, reload, signOut };
 }
 
-/* ============================== Auth (magic link) ============================== */
+/* ============================== Auth (email + password) ============================== */
 function Auth() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const send = async (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || !password) return;
     setBusy(true); setErr("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
-    });
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setBusy(false);
-    if (error) setErr(error.message); else setSent(true);
+    if (error) setErr(error.message);
   };
 
   return (
@@ -1993,26 +1990,21 @@ function Auth() {
         <div className="connect-card">
           <h1>Operating Plan</h1>
           <div className="connect-sub">Implementation Tracker</div>
-          {sent ? (
-            <p className="connect-text">
-              Check your inbox — we sent a sign-in link to <b>{email}</b>.
-              Open it on this device to enter the tracker.
-            </p>
-          ) : (
-            <>
-              <p className="connect-text">Sign in with your work email. We'll email you a one-time link — no password to remember.</p>
-              <form className="connect-actions" onSubmit={send} style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
-                <input
-                  type="email" required value={email} placeholder="you@company.com"
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
-                <button className="btn" type="submit" disabled={busy}>
-                  {busy ? "Sending…" : "Email me a sign-in link"}
-                </button>
-              </form>
-              {err && <div className="connect-note" style={{ color: "var(--block)" }}>{err}</div>}
-            </>
-          )}
+          <p className="connect-text">Sign in with the email and password your administrator gave you.</p>
+          <form className="connect-actions" onSubmit={submit} style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
+            <input
+              type="email" required value={email} placeholder="you@company.com" autoComplete="username"
+              onChange={(e) => setEmail(e.target.value)}
+              style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
+            <input
+              type="password" required value={password} placeholder="Password" autoComplete="current-password"
+              onChange={(e) => setPassword(e.target.value)}
+              style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
+            <button className="btn" type="submit" disabled={busy}>
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+          </form>
+          {err && <div className="connect-note" style={{ color: "var(--block)" }}>{err}</div>}
           <div className="connect-fine">Access is limited to invited team members.</div>
         </div>
       </div>

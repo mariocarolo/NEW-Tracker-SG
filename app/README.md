@@ -6,7 +6,7 @@ nothing ever "appears then disappears".
 
 - **Frontend:** React + Vite (static site) — deploy on **Vercel**
 - **Backend:** **Supabase** — Postgres + Realtime + Auth, all in one free project
-- **Sign-in:** magic link (passwordless email)
+- **Sign-in:** email + password (no email sending required; admin creates accounts)
 - **Keep-alive:** a GitHub Action pings Supabase every 3 days so the free project never pauses
 
 The UI (5 tabs: Overview, Board, Schedule, Calendar, People, plus PDF/Excel
@@ -42,18 +42,21 @@ the browser, refresh, redeploy — the data is in Postgres, untouched.
    - **Project URL** (e.g. `https://abcd1234.supabase.co`)
    - **anon public** key
 
-### 2. Turn on magic-link sign-in
-1. **Authentication → Providers → Email**: make sure **Email** is enabled.
-   (Leave "Confirm email" on; that's what makes the link work.)
-2. **Authentication → URL Configuration**: set **Site URL** to your eventual
-   Vercel URL (you can update this after step 3, e.g.
-   `https://your-app.vercel.app`). Add it to **Redirect URLs** too.
-3. **Limit who can sign in** (so it's truly internal). Either:
-   - **Authentication → Providers → Email →** turn **off** "Allow new users to
-     sign up", then add your 14 teammates under **Authentication → Users → Add
-     user** (enter each email; they'll get a link on first sign-in), **or**
-   - keep sign-ups on but restrict by domain via an allowlist — see the
-     Supabase docs on "Restrict sign ups to a domain".
+### 2. Set up email + password sign-in (no email sending required)
+The built-in Supabase email service is rate-limited and not for production, so
+this app uses email + password. The admin creates each account directly, so
+**no confirmation emails are ever sent**.
+
+1. **Authentication → Providers → Email**: make sure **Email** is enabled, and
+   turn **OFF** "Allow new users to sign up" (only the admin creates accounts).
+2. **Authentication → Sign In / Up** (or **Settings**): turn **OFF**
+   "Confirm email". This lets admin-created accounts log in immediately without
+   any email.
+3. **Create the 14 accounts**: **Authentication → Users → Add user → Create new
+   user**. For each person enter their **email** and a **password**, and tick
+   **Auto Confirm User**. Share each person's email + password with them (e.g.
+   over your internal chat). They can't change their own password without email,
+   so to reset one just edit the user here.
 
 ### 3. Deploy the frontend on Vercel
 1. Push this repo to GitHub (already done if you're reading this there).
@@ -63,9 +66,8 @@ the browser, refresh, redeploy — the data is in Postgres, untouched.
 4. Under **Environment Variables**, add:
    - `VITE_SUPABASE_URL` = your Project URL
    - `VITE_SUPABASE_ANON_KEY` = your anon public key
-5. **Deploy.** When it's live, copy the Vercel URL and paste it back into
-   Supabase **Authentication → URL Configuration** (Site URL + Redirect URLs),
-   so the magic links return to your app.
+5. **Deploy.** When it's live, copy the Vercel URL and share it with your team.
+   (No Supabase URL configuration is needed for password sign-in.)
 
 ### 4. Turn on the keep-alive (so the project never pauses)
 In **GitHub → repo Settings → Secrets and variables → Actions → New repository
