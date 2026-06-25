@@ -89,8 +89,20 @@ const CSS = `
 .pm .cp-check.done { color:var(--done); }
 .pm .cp-label { flex:1; font-size:13px; background:transparent; border:none; padding:2px; border-radius:4px; }
 .pm .cp-label:focus { background:#fff; outline:1px solid var(--line); }
-.pm .cp.done .cp-label { color:var(--ink-soft); text-decoration:line-through; }
+.pm .cp.done .cp-label { color:var(--ink); text-decoration:line-through; text-decoration-color:#b9b9b9; text-decoration-thickness:1px; }
 .pm .cp-date { border:1px solid var(--line); background:var(--card); padding:4px 7px; border-radius:6px; font-family:var(--mono); font-size:11px; }
+.pm .cp-cat { border:1px solid var(--line); background:var(--card); padding:4px 6px; border-radius:6px; font-size:11px; color:var(--ink-soft); }
+.pm .cp-health { font-family:var(--mono); font-size:10px; font-weight:600; padding:2px 7px; border:1px solid currentColor; border-radius:999px; white-space:nowrap; }
+.pm .cp-done-btn { font-size:11px; font-weight:600; padding:3px 9px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink-soft); cursor:pointer; white-space:nowrap; }
+.pm .cp-done-btn.done { border-color:var(--done); color:var(--done); }
+.pm .cp-done-btn:hover { background:#f3f1ea; }
+.pm .del-row { display:flex; align-items:center; gap:14px; padding:12px 4px; border-bottom:1px solid var(--line-soft); }
+.pm .del-row:last-child { border-bottom:none; }
+.pm .del-kind { font-family:var(--mono); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); background:#f0ede4; padding:3px 8px; border-radius:6px; flex-shrink:0; width:92px; text-align:center; }
+.pm .del-main { flex:1; min-width:0; }
+.pm .del-title { font-size:14px; color:var(--ink); }
+.pm .del-sub { font-size:11px; color:var(--ink-soft); margin-top:2px; }
+.pm .linklike { background:none; border:none; color:#5b6aa8; font-size:12px; cursor:pointer; padding:8px 0 0; text-decoration:underline; align-self:center; }
 .pm .icon-btn { color:var(--idle); display:flex; padding:4px; border-radius:5px; transition:color .12s,background .12s; }
 .pm .icon-btn:hover { color:var(--block); background:#fff; }
 
@@ -388,9 +400,50 @@ const PHASE_LEN = 3; // months per phase
 const STATUSES = [
   { v: "not_started", l: "Not started", c: "var(--idle)" },
   { v: "in_progress", l: "In progress", c: "var(--prog)" },
-  { v: "blocked", l: "Blocked", c: "var(--block)" },
   { v: "done", l: "Done", c: "var(--done)" },
 ];
+
+// Checkpoint categories (user-selectable).
+const CP_CATEGORIES = ["Planning", "Execution", "Delivery"];
+
+// Automated checkpoint health, derived from the checkpoint date vs today.
+// Done checkpoints are concluded and have no health badge.
+function cpHealth(cp) {
+  if (!cp || cp.done || !cp.date) return null;
+  const gap = dayGap(todayISO(), cp.date); // >0 future, <0 past
+  if (gap >= 0) return { key: "on_track", label: "On Track", color: "#3f7d4e" };
+  const late = -gap;
+  if (late <= 7) return { key: "delayed", label: "Delayed", color: "#c0892b" };
+  return { key: "stopped", label: "Stopped", color: "#bf3b34" };
+}
+
+// The topic target date is ALWAYS the latest checkpoint date (auto, not editable).
+function computeDue(item) {
+  const dates = (item.checkpoints || []).map((c) => c.date).filter(Boolean);
+  return dates.length ? dates.reduce((m, d) => (d > m ? d : m)) : (item.due || "");
+}
+
+// The topic status is ALWAYS computed from the start date + checkpoint completion.
+function computeStatus(item) {
+  if (!item.start) return "not_started";
+  const cps = item.checkpoints || [];
+  if (cps.length > 0 && cps.every((c) => c.done)) return "done";
+  return "in_progress";
+}
+
+// Normalize a single topic's derived fields (status, due, completedAt).
+function applyDerivedItem(it) {
+  const status = computeStatus(it);
+  const due = computeDue(it);
+  const completedAt = status === "done" ? (it.completedAt || todayISO()) : null;
+  return { ...it, status, due, completedAt };
+}
+
+// Apply derived fields across the whole tree (used on every save + on load).
+function recomputeDerived(data) {
+  if (!data || !Array.isArray(data.cats)) return data;
+  return { ...data, cats: data.cats.map((c) => ({ ...c, items: c.items.map(applyDerivedItem) })) };
+}
 const PRIORITIES = [
   { v: "high", l: "High", c: "#bf3b34" },
   { v: "med", l: "Medium", c: "#c0892b" },
@@ -499,13 +552,13 @@ const dayGap = (aISO, bISO) => Math.round((parse(bISO) - parse(aISO)) / DAY);
 function autoHealth(it) {
   const today = todayISO();
   if (it.status === "done") return "green";
-  if (it.status === "blocked") return "red";
+  if (it.status === "not_started" || !it.start) return "green";
   const overdueCp = it.checkpoints.some((cp) => !cp.done && cp.date < today);
-  if (overdueCp || it.due < today) return "red";
+  if (overdueCp || (it.due && it.due < today)) return "red";
   const soon = it.checkpoints.some((cp) => !cp.done && cp.date >= today && dayGap(today, cp.date) <= 14);
   const p = pctOf(it);
   let behind = false;
-  if (it.start <= today && it.due > it.start) {
+  if (it.start && it.due && it.start <= today && it.due > it.start) {
     const total = Math.max(1, dayGap(it.start, it.due));
     const elapsed = Math.max(0, Math.min(total, dayGap(it.start, today)));
     behind = p < (elapsed / total) * 100 - 25;
@@ -608,23 +661,18 @@ function withSnapshot(d) {
 }
 
 /* ============================== Initiative ============================== */
-function Initiative({ item, color, owners, onChange, onDelete, ask }) {
+function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoint, onDeleteNote, ask }) {
   const [open, setOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const pct = pctOf(item);
-  const st = STATUSES.find((s) => s.v === item.status);
+  const st = STATUSES.find((s) => s.v === item.status) || STATUSES[0];
   const health = healthOf(item);
   const rg = RAG[health];
+  const dueAuto = computeDue(item);
 
   const set = (patch) => onChange({ ...item, ...patch });
   const setCp = (cid, patch) =>
     set({ checkpoints: item.checkpoints.map((c) => (c.id === cid ? { ...c, ...patch } : c)) });
-  const changeStatus = (v) => {
-    const patch = { status: v };
-    if (v === "done" && !item.completedAt) patch.completedAt = todayISO();
-    if (v !== "done" && item.completedAt) patch.completedAt = null;
-    set(patch);
-  };
 
   return (
     <div className="init">
@@ -644,8 +692,8 @@ function Initiative({ item, color, owners, onChange, onDelete, ask }) {
           title={`Health: ${rg.l}${item.status !== "done" && health !== "green" ? " — " + healthReason(item) : ""}${item.health && item.health !== "auto" ? " (manual)" : ""}`} />
         <div className="bar mini-bar"><i style={{ width: `${pct}%`, background: color }} /></div>
         <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16" }}>{st.l}</span>
-        <button className="icon-btn" title="Delete initiative"
-          onClick={(e) => { e.stopPropagation(); ask(`Delete “${item.title}”? This can't be undone.`, onDelete, { danger: true, confirmLabel: "Delete" }); }}>
+        <button className="icon-btn" title="Move to Deleted"
+          onClick={(e) => { e.stopPropagation(); ask(`Move “${item.title}” to the Deleted tab? You can restore it later.`, onDelete, { danger: true, confirmLabel: "Move to Deleted" }); }}>
           <Trash2 size={14} />
         </button>
       </div>
@@ -664,19 +712,8 @@ function Initiative({ item, color, owners, onChange, onDelete, ask }) {
                 onChange={(e) => set({ owner2: e.target.value })} />
             </div>
             <div className="field">
-              <label>Status</label>
-              <select value={item.status} onChange={(e) => changeStatus(e.target.value)}>
-                {STATUSES.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
-              </select>
-            </div>
-            <div className="field">
-              <label>Health (RAG)</label>
-              <select value={item.health || "auto"} onChange={(e) => set({ health: e.target.value })}>
-                <option value="auto">Auto · {RAG[autoHealth(item)].l}</option>
-                <option value="green">Green · on track</option>
-                <option value="amber">Amber · at risk</option>
-                <option value="red">Red · off track</option>
-              </select>
+              <label>Status (automatic)</label>
+              <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16", alignSelf: "flex-start" }}>{st.l}</span>
             </div>
             <div className="field">
               <label>Phase</label>
@@ -685,32 +722,58 @@ function Initiative({ item, color, owners, onChange, onDelete, ask }) {
               </select>
             </div>
             <div className="field">
-              <label>Start</label>
-              <input type="date" value={item.start} onChange={(e) => set({ start: e.target.value })} />
+              <label>Start date</label>
+              {item.start ? (
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input type="date" value={item.start} onChange={(e) => set({ start: e.target.value })} />
+                  <button className="btn ghost" title="Undo start (clear start date)" onClick={() => set({ start: "" })}>
+                    <RotateCcw size={12} /> Undo
+                  </button>
+                </div>
+              ) : (
+                <button className="btn" onClick={() => set({ start: todayISO() })}>
+                  <Plus size={13} /> Start now
+                </button>
+              )}
             </div>
             <div className="field">
-              <label>Target date</label>
-              <input type="date" value={item.due} onChange={(e) => set({ due: e.target.value })} />
+              <label>Target date (automatic)</label>
+              <div style={{ padding: "7px 2px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-soft)" }}>
+                {dueAuto ? fmt(dueAuto) : "— add a checkpoint"}
+              </div>
             </div>
           </div>
 
           {/* checkpoints */}
           <div className="col-title"><GanttChartSquare size={13} /> Checkpoints — {item.checkpoints.filter(c=>c.done).length}/{item.checkpoints.length} complete</div>
-          {item.checkpoints.map((c) => (
-            <div className={`cp${c.done ? " done" : ""}`} key={c.id}>
-              <button className={`cp-check${c.done ? " done" : ""}`} onClick={() => setCp(c.id, { done: !c.done })}>
-                {c.done ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-              </button>
-              <input className="cp-label" value={c.label} onChange={(e) => setCp(c.id, { label: e.target.value })} />
-              <input className="cp-date" type="date" value={c.date} onChange={(e) => setCp(c.id, { date: e.target.value })} />
-              <button className="icon-btn" onClick={() => set({ checkpoints: item.checkpoints.filter((x) => x.id !== c.id) })}>
-                <X size={14} />
-              </button>
-            </div>
-          ))}
+          {item.checkpoints.map((c) => {
+            const h = cpHealth(c);
+            return (
+              <div className={`cp${c.done ? " done" : ""}`} key={c.id}>
+                <button className={`cp-check${c.done ? " done" : ""}`} title={c.done ? "Mark as not done" : "Mark as done"}
+                  onClick={() => setCp(c.id, { done: !c.done })}>
+                  {c.done ? <CheckCircle2 size={18} /> : <Circle size={18} />}
+                </button>
+                <input className="cp-label" value={c.label} onChange={(e) => setCp(c.id, { label: e.target.value })} />
+                <select className="cp-cat" value={c.category || "Planning"} onChange={(e) => setCp(c.id, { category: e.target.value })}>
+                  {CP_CATEGORIES.map((k) => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <input className="cp-date" type="date" value={c.date} onChange={(e) => setCp(c.id, { date: e.target.value })} />
+                {c.done
+                  ? <span className="cp-health" style={{ color: "var(--done)", borderColor: "var(--done)" }}>Done</span>
+                  : h && <span className="cp-health" style={{ color: h.color, borderColor: h.color }}>{h.label}</span>}
+                {c.done
+                  ? <button className="cp-done-btn" onClick={() => setCp(c.id, { done: false })}>Reopen</button>
+                  : <button className="cp-done-btn done" onClick={() => setCp(c.id, { done: true })}>Done</button>}
+                <button className="icon-btn" title="Move checkpoint to Deleted" onClick={() => onDeleteCheckpoint && onDeleteCheckpoint(c)}>
+                  <X size={14} />
+                </button>
+              </div>
+            );
+          })}
           <div className="add-row">
             <button className="btn ghost" onClick={() =>
-              set({ checkpoints: [...item.checkpoints, { id: uid(), label: "New checkpoint", date: item.due, done: false }] })}>
+              set({ checkpoints: [...item.checkpoints, { id: uid(), label: "New checkpoint", date: todayISO(), done: false, category: "Planning" }] })}>
               <Plus size={13} /> Add checkpoint
             </button>
           </div>
@@ -720,7 +783,7 @@ function Initiative({ item, color, owners, onChange, onDelete, ask }) {
           {item.notes.map((n) => (
             <div className="note" key={n.id}>
               <p>{n.text}<br /><span className="stamp">{fmt(n.date)}</span></p>
-              <button className="icon-btn" onClick={() => set({ notes: item.notes.filter((x) => x.id !== n.id) })}>
+              <button className="icon-btn" title="Move note to Deleted" onClick={() => onDeleteNote && onDeleteNote(n)}>
                 <X size={14} />
               </button>
             </div>
@@ -745,7 +808,7 @@ function Initiative({ item, color, owners, onChange, onDelete, ask }) {
 }
 
 /* ============================== Board view ============================== */
-function Board({ data, owners, update, ask }) {
+function Board({ data, owners, update, ask, del }) {
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState("all");
   const [fOwner, setFOwner] = useState("all");
@@ -787,7 +850,9 @@ function Board({ data, owners, update, ask }) {
               {visible.map((it) => (
                 <Initiative key={it.id} item={it} color={cat.color} owners={owners} ask={ask}
                   onChange={(next) => update((d) => patchItem(d, cat.id, it.id, next))}
-                  onDelete={() => update((d) => deleteItem(d, cat.id, it.id))} />
+                  onDelete={() => del.topic(cat.id, it, cat.items.indexOf(it))}
+                  onDeleteCheckpoint={(cp) => del.checkpoint(cat.id, it, cp)}
+                  onDeleteNote={(n) => del.note(cat.id, it, n)} />
               ))}
               <div className="add-init">
                 <input placeholder="Add a new topic to this workstream…"
@@ -806,9 +871,9 @@ function Board({ data, owners, update, ask }) {
   function addInit(cat) {
     const t = (adding[cat.id] || "").trim();
     if (!t) return;
-    const due = iso(addDays(parse(data.start), 30));
+    // New topics start with NO start date (Not started) and no checkpoints.
     const ni = { id: uid(), title: t, owner: "", owner2: "", status: "not_started",
-      phase: 1, start: data.start, due, checkpoints: [], notes: [] };
+      phase: 1, start: "", due: "", checkpoints: [], notes: [] };
     update((d) => ({ ...d, cats: d.cats.map((c) => c.id === cat.id ? { ...c, items: [...c.items, ni] } : c) }));
     setAdding({ ...adding, [cat.id]: "" });
   }
@@ -1798,10 +1863,10 @@ function itemSig(item, wsId, order) {
 }
 
 /* ---- assemble the nested `data` shape the views expect, from flat rows ---- */
-function assembleData(settings, workstreams, topics, activity, history) {
+function assembleData(settings, workstreams, topics, activity, history, deleted) {
   const byWs = {};
   topics.forEach((t) => { (byWs[t.workstream_id] = byWs[t.workstream_id] || []).push(t); });
-  return {
+  return recomputeDerived({
     version: settings?.version ?? 1,
     start: settings?.start || defaultStart(),
     cats: [...workstreams]
@@ -1816,20 +1881,26 @@ function assembleData(settings, workstreams, topics, activity, history) {
       })),
     activity: (activity || []).map((a) => ({ id: a.id, ts: a.ts, type: a.type, topic: a.topic, msg: a.msg })),
     history: (history || []).map((h) => h.snapshot).filter(Boolean),
-  };
+    deleted: (deleted || []).map((d) => ({
+      id: d.id, kind: d.kind, payload: d.payload, workstream_id: d.workstream_id,
+      topic_id: d.topic_id, sort_order: d.sort_order, context: d.context,
+      deleted_by: d.deleted_by, deleted_at: d.deleted_at,
+    })),
+  });
 }
 
 async function fetchAll() {
-  const [settings, workstreams, topics, activity, history] = await Promise.all([
+  const [settings, workstreams, topics, activity, history, deleted] = await Promise.all([
     supabase.from("settings").select("*").eq("id", 1).maybeSingle(),
     supabase.from("workstreams").select("*"),
     supabase.from("topics").select("*"),
     supabase.from("activity").select("*").order("ts", { ascending: true }).limit(MAX_ACTIVITY),
     supabase.from("history").select("*").order("week", { ascending: true }),
+    supabase.from("deleted_items").select("*").order("deleted_at", { ascending: false }),
   ]);
-  const err = settings.error || workstreams.error || topics.error || activity.error || history.error;
+  const err = settings.error || workstreams.error || topics.error || activity.error || history.error || deleted.error;
   if (err) throw err;
-  return assembleData(settings.data, workstreams.data || [], topics.data || [], activity.data || [], history.data || []);
+  return assembleData(settings.data, workstreams.data || [], topics.data || [], activity.data || [], history.data || [], deleted.data || []);
 }
 
 /* ---- write the difference between two trees back to Postgres ---- */
@@ -1890,7 +1961,7 @@ async function persistDiff(prev, next) {
 }
 
 /* ---- the store hook: load + realtime + drop-in `update(fn)` ---- */
-function useTracker() {
+function useTracker(currentEmail) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("loading"); // loading | ready | empty | error
   const [savedAt, setSavedAt] = useState(null);
@@ -1936,7 +2007,7 @@ function useTracker() {
   useEffect(() => {
     reload();
     const channel = supabase.channel("tracker-realtime");
-    ["settings", "workstreams", "topics", "activity", "history"].forEach((table) =>
+    ["settings", "workstreams", "topics", "activity", "history", "deleted_items"].forEach((table) =>
       channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
         if (reloadTimer.current) clearTimeout(reloadTimer.current);
         reloadTimer.current = setTimeout(reload, 180);
@@ -1946,7 +2017,8 @@ function useTracker() {
     return () => { supabase.removeChannel(channel); if (reloadTimer.current) clearTimeout(reloadTimer.current); };
   }, [reload]);
 
-  // drop-in replacement for the reference app's `update(fn)`
+  // drop-in replacement for the reference app's `update(fn)`.
+  // recomputeDerived enforces the automatic status & target-date business rules.
   const update = useCallback((fn) => {
     const prev = dataRef.current;
     if (!prev) return;
@@ -1955,22 +2027,131 @@ function useTracker() {
     const merged = events.length
       ? { ...next0, activity: [...(next0.activity || []), ...events].slice(-MAX_ACTIVITY) }
       : next0;
-    const final = withSnapshot(merged);
+    const final = withSnapshot(recomputeDerived(merged));
     setData(final);                       // optimistic, instant UI
     persistDiff(prev, final)              // durable write to Postgres
       .then((touched) => { touched.forEach((id) => editRef.current.set(id, Date.now())); setSavedAt(Date.now()); })
       .catch((e) => { console.error("save failed — reloading from server", e); reload(); });
   }, [reload]);
 
+  // ---- soft delete + restore (recoverable Deleted tab) ----
+  // A structural change (remove/restore) is written through persistDiff so it is
+  // durable, plus a row is inserted/removed from deleted_items.
+  const findItem = (d, id) => {
+    for (const c of d.cats) { const it = c.items.find((x) => x.id === id); if (it) return { cat: c, item: it }; }
+    return null;
+  };
+
+  const softDelete = useCallback(async (deletedRow, treeFn) => {
+    const prev = dataRef.current;
+    if (!prev) return;
+    const tree = withSnapshot(recomputeDerived(treeFn(prev)));
+    const next = { ...tree, deleted: [deletedRow, ...(prev.deleted || [])] };
+    setData(next);
+    try {
+      await supabase.from("deleted_items").insert({
+        id: deletedRow.id, kind: deletedRow.kind, payload: deletedRow.payload,
+        workstream_id: deletedRow.workstream_id || null, topic_id: deletedRow.topic_id || null,
+        sort_order: deletedRow.sort_order ?? null, context: deletedRow.context || null,
+        deleted_by: deletedRow.deleted_by || null,
+      });
+      await persistDiff(prev, tree);
+      setSavedAt(Date.now());
+    } catch (e) { console.error("soft delete failed", e); reload(); }
+  }, [reload]);
+
+  const makeDeleted = (kind, payload, meta) => ({
+    id: uid(), kind, payload, deleted_by: currentEmail || null, deleted_at: nowISO(), ...meta,
+  });
+
+  const del = useMemo(() => ({
+    topic: (catId, item, order) =>
+      softDelete(makeDeleted("topic", item, { workstream_id: catId, sort_order: order, context: item.title }),
+        (d) => deleteItem(d, catId, item.id)),
+    checkpoint: (catId, item, cp) =>
+      softDelete(makeDeleted("checkpoint", cp, { topic_id: item.id, context: item.title }),
+        (d) => patchItem(d, catId, item.id, { ...item, checkpoints: item.checkpoints.filter((x) => x.id !== cp.id) })),
+    note: (catId, item, n) =>
+      softDelete(makeDeleted("note", n, { topic_id: item.id, context: item.title }),
+        (d) => patchItem(d, catId, item.id, { ...item, notes: item.notes.filter((x) => x.id !== n.id) })),
+  }), [softDelete, currentEmail]);
+
+  const restore = useCallback(async (row) => {
+    const prev = dataRef.current;
+    if (!prev) return;
+    let tree = prev;
+    if (row.kind === "topic") {
+      const exists = prev.cats.some((c) => c.id === row.workstream_id);
+      const targetWs = exists ? row.workstream_id : prev.cats[0]?.id;
+      if (!targetWs) return;
+      tree = { ...prev, cats: prev.cats.map((c) => c.id !== targetWs ? c : { ...c, items: [...c.items, row.payload] }) };
+      editRef.current.set(row.payload.id, Date.now());
+    } else if (row.kind === "checkpoint" || row.kind === "note") {
+      const found = findItem(prev, row.topic_id);
+      if (!found) { alert("The topic this item belonged to no longer exists, so it can't be restored here."); return; }
+      const key = row.kind === "checkpoint" ? "checkpoints" : "notes";
+      const list = [...(found.item[key] || []), row.payload];
+      if (key === "checkpoints") list.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      tree = patchItem(prev, found.cat.id, found.item.id, { ...found.item, [key]: list });
+      editRef.current.set(found.item.id, Date.now());
+    }
+    const recomputed = withSnapshot(recomputeDerived(tree));
+    setData({ ...recomputed, deleted: (prev.deleted || []).filter((d) => d.id !== row.id) });
+    try {
+      await persistDiff(prev, recomputed);
+      await supabase.from("deleted_items").delete().eq("id", row.id);
+      setSavedAt(Date.now());
+    } catch (e) { console.error("restore failed", e); reload(); }
+  }, [reload]);
+
   const signOut = useCallback(() => supabase.auth.signOut(), []);
 
-  return { data, status, savedAt, update, reload, signOut };
+  return { data, status, savedAt, update, del, restore, reload, signOut };
+}
+
+/* ============================== Deleted tab (recoverable archive) ============================== */
+function DeletedView({ data, restore }) {
+  const items = data.deleted || [];
+  const kindLabel = { topic: "Topic", checkpoint: "Checkpoint", note: "Note" };
+  const titleOf = (d) =>
+    d.kind === "topic" ? (d.payload?.title || "Untitled topic")
+      : d.kind === "checkpoint" ? (d.payload?.label || "Checkpoint")
+        : (d.payload?.text || "Note");
+  return (
+    <>
+      <div className="toolbar"><span className="ph" style={{ marginTop: 4 }}>
+        Deleted items are kept here safely and can be restored to their original place. Nothing is ever permanently deleted.
+      </span></div>
+      <div className="sec">
+        <div className="card">
+          {items.length === 0 && (
+            <div className="empty">Nothing has been deleted. Deleted topics, checkpoints and notes will appear here, ready to restore.</div>
+          )}
+          {items.map((d) => (
+            <div className="del-row" key={d.id}>
+              <span className="del-kind">{kindLabel[d.kind] || d.kind}</span>
+              <div className="del-main">
+                <div className="del-title">{titleOf(d)}</div>
+                <div className="del-sub">
+                  {d.kind !== "topic" && d.context ? `in “${d.context}” · ` : ""}
+                  {d.deleted_by ? `by ${d.deleted_by} · ` : ""}
+                  {d.deleted_at ? fmtDT(d.deleted_at) : ""}
+                </div>
+              </div>
+              <button className="btn" onClick={() => restore(d)}><RotateCcw size={13} /> Restore</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 }
 
 /* ============================== Auth (email + password) ============================== */
 function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("signin"); // signin | signup
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -1978,9 +2159,13 @@ function Auth() {
     e.preventDefault();
     if (!email.trim() || !password) return;
     setBusy(true); setErr("");
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    const creds = { email: email.trim(), password };
+    const { error } = mode === "signup"
+      ? await supabase.auth.signUp(creds)
+      : await supabase.auth.signInWithPassword(creds);
     setBusy(false);
     if (error) setErr(error.message);
+    // On success the onAuthStateChange listener signs the user straight in.
   };
 
   return (
@@ -1990,22 +2175,30 @@ function Auth() {
         <div className="connect-card">
           <h1>Operating Plan</h1>
           <div className="connect-sub">Implementation Tracker</div>
-          <p className="connect-text">Sign in with the email and password your administrator gave you.</p>
+          <p className="connect-text">
+            {mode === "signup"
+              ? "Create your account with your work email. Only authorized addresses are allowed."
+              : "Sign in with your work email and password."}
+          </p>
           <form className="connect-actions" onSubmit={submit} style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
             <input
               type="email" required value={email} placeholder="you@company.com" autoComplete="username"
               onChange={(e) => setEmail(e.target.value)}
               style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
             <input
-              type="password" required value={password} placeholder="Password" autoComplete="current-password"
+              type="password" required value={password} placeholder={mode === "signup" ? "Choose a password" : "Password"}
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
               onChange={(e) => setPassword(e.target.value)}
               style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #d9d3c6", fontSize: 14 }} />
             <button className="btn" type="submit" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
+              {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
             </button>
           </form>
           {err && <div className="connect-note" style={{ color: "var(--block)" }}>{err}</div>}
-          <div className="connect-fine">Access is limited to invited team members.</div>
+          <button className="linklike" type="button" onClick={() => { setErr(""); setMode(mode === "signup" ? "signin" : "signup"); }}>
+            {mode === "signup" ? "Already have an account? Sign in" : "First time here? Create your account"}
+          </button>
+          <div className="connect-fine">Access is limited to authorized team members.</div>
         </div>
       </div>
     </div>
@@ -2014,7 +2207,7 @@ function Auth() {
 
 /* ============================== Tracker (authenticated app shell) ============================== */
 function Tracker({ session }) {
-  const { data, status, savedAt, update, signOut } = useTracker();
+  const { data, status, savedAt, update, del, restore, signOut } = useTracker(session?.user?.email);
   const [tab, setTab] = useState("board");
   const [report, setReport] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -2096,6 +2289,7 @@ function Tracker({ session }) {
             <button className={`tab${tab === "schedule" ? " on" : ""}`} onClick={() => setTab("schedule")}><GanttChartSquare size={15} /> Schedule</button>
             <button className={`tab${tab === "calendar" ? " on" : ""}`} onClick={() => setTab("calendar")}><CalendarDays size={15} /> Calendar</button>
             <button className={`tab${tab === "people" ? " on" : ""}`} onClick={() => setTab("people")}><Users size={15} /> People</button>
+            <button className={`tab${tab === "deleted" ? " on" : ""}`} onClick={() => setTab("deleted")}><Trash2 size={15} /> Deleted{data.deleted && data.deleted.length ? ` (${data.deleted.length})` : ""}</button>
             <div className="export-wrap no-print" style={{ marginLeft: "auto" }}>
               <button className="tab" onClick={() => setExportOpen((o) => !o)}><Download size={15} /> Export</button>
               {exportOpen && (
@@ -2158,10 +2352,11 @@ function Tracker({ session }) {
 
       <div className="wrap">
         {tab === "overview" && <Overview data={data} />}
-        {tab === "board" && <Board data={data} owners={owners} update={update} ask={ask} />}
+        {tab === "board" && <Board data={data} owners={owners} update={update} ask={ask} del={del} />}
         {tab === "schedule" && <Schedule data={data} />}
         {tab === "calendar" && <CalendarView data={data} />}
         {tab === "people" && <People data={data} />}
+        {tab === "deleted" && <DeletedView data={data} restore={restore} ask={ask} />}
       </div>
 
       {report === "board" && <BoardReport data={data} onClose={() => setReport(null)} />}

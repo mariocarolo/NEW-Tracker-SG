@@ -9,10 +9,17 @@ nothing ever "appears then disappears".
 - **Sign-in:** email + password (no email sending required; admin creates accounts)
 - **Keep-alive:** a GitHub Action pings Supabase every 3 days so the free project never pauses
 
-The UI (5 tabs: Overview, Board, Schedule, Calendar, People, plus PDF/Excel
-exports) is ported from the original `operating-plan-tracker v5.html`. Only the
-data layer was rebuilt — every create/edit/delete now writes straight to
-Postgres and is broadcast to all other users.
+The UI (6 tabs: Overview, Board, Schedule, Calendar, People, Deleted, plus
+PDF/Excel exports) is ported from the original `operating-plan-tracker v5.html`.
+Only the data layer was rebuilt — every create/edit/delete now writes straight
+to Postgres and is broadcast to all other users.
+
+> **Already have it running? To pick up the latest changes** (self-service
+> sign-up, Deleted tab, automatic status/target dates, checkpoint health &
+> categories): in the Supabase **SQL editor** run **`supabase/upgrade.sql`**
+> once, then turn **ON** "Allow new users to sign up" and **OFF** "Confirm
+> email" under **Authentication**. Vercel redeploys the frontend automatically
+> when you push. That's it.
 
 ---
 
@@ -42,21 +49,25 @@ the browser, refresh, redeploy — the data is in Postgres, untouched.
    - **Project URL** (e.g. `https://abcd1234.supabase.co`)
    - **anon public** key
 
-### 2. Set up email + password sign-in (no email sending required)
-The built-in Supabase email service is rate-limited and not for production, so
-this app uses email + password. The admin creates each account directly, so
-**no confirmation emails are ever sent**.
+### 2. Set up self-service sign-up (email + password, no manual approval)
+This app uses email + password with **self-service sign-up restricted to
+authorized people**. No confirmation emails are sent, and you never have to
+approve anyone by hand — a database rule only lets authorized emails register.
 
-1. **Authentication → Providers → Email**: make sure **Email** is enabled, and
-   turn **OFF** "Allow new users to sign up" (only the admin creates accounts).
+1. **Authentication → Providers → Email**: make sure **Email** is enabled and
+   turn **ON** "Allow new users to sign up".
 2. **Authentication → Sign In / Up** (or **Settings**): turn **OFF**
-   "Confirm email". This lets admin-created accounts log in immediately without
-   any email.
-3. **Create the 14 accounts**: **Authentication → Users → Add user → Create new
-   user**. For each person enter their **email** and a **password**, and tick
-   **Auto Confirm User**. Share each person's email + password with them (e.g.
-   over your internal chat). They can't change their own password without email,
-   so to reset one just edit the user here.
+   "Confirm email" so new accounts work instantly without any email.
+3. The signup restriction is created by the SQL in step 1 (`schema.sql`) — it
+   only allows emails on your company domain (default `sigulerguff.com`) plus
+   anything you add to the `allowed_emails` table. **Edit that domain** in
+   `schema.sql` (function `enforce_allowed_signup`) before running it if your
+   domain differs.
+
+Now anyone with an authorized email opens the app, clicks **"First time here?
+Create your account"**, sets a password, and is in immediately. To authorize an
+outside collaborator, add their email:
+`insert into public.allowed_emails (email) values ('name@partner.com');`
 
 ### 3. Deploy the frontend on Vercel
 1. Push this repo to GitHub (already done if you're reading this there).

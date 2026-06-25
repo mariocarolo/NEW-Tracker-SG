@@ -71,6 +71,20 @@ create table if not exists public.history (
   updated_at timestamptz not null default now()
 );
 
+-- ---- deleted items (recoverable archive — nothing is ever hard-deleted by users) ----
+create table if not exists public.deleted_items (
+  id            text primary key,
+  kind          text not null,            -- 'topic' | 'checkpoint' | 'note'
+  payload       jsonb not null,           -- the full original item, for restore
+  workstream_id text,                     -- where a topic should be restored
+  topic_id      text,                     -- which topic a checkpoint/note belongs to
+  sort_order    int,
+  context       text,                     -- e.g. the topic title, for display
+  deleted_by    text,
+  deleted_at    timestamptz not null default now()
+);
+create index if not exists deleted_items_deleted_at_idx on public.deleted_items(deleted_at);
+
 -- ============================================================================
 --  Realtime: broadcast every change to connected clients
 -- ============================================================================
@@ -79,6 +93,7 @@ alter publication supabase_realtime add table public.workstreams;
 alter publication supabase_realtime add table public.topics;
 alter publication supabase_realtime add table public.activity;
 alter publication supabase_realtime add table public.history;
+alter publication supabase_realtime add table public.deleted_items;
 
 -- ============================================================================
 --  Row-Level Security: signed-in users can do everything; anon gets nothing
@@ -88,14 +103,40 @@ alter table public.workstreams enable row level security;
 alter table public.topics      enable row level security;
 alter table public.activity    enable row level security;
 alter table public.history     enable row level security;
+alter table public.deleted_items enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['settings','workstreams','topics','activity','history'] loop
+  foreach t in array array['settings','workstreams','topics','activity','history','deleted_items'] loop
     execute format(
       'create policy %I on public.%I for all to authenticated using (true) with check (true)',
       'authenticated_all_' || t, t
     );
   end loop;
 end $$;
+
+-- ============================================================================
+--  Self-service signup, restricted to authorized people (no manual approval)
+--  Users can create their own account, but ONLY if their email is on the
+--  company domain or has been added to allowed_emails. Everyone else is
+--  rejected automatically — the app never becomes public.
+-- ============================================================================
+create table if not exists public.allowed_emails ( email text primary key );
+
+-- >>> EDIT THIS to your company's email domain <<<
+create or replace function public.enforce_allowed_signup()
+returns trigger language plpgsql security definer as $$
+declare allowed_domain text := 'sigulerguff.com';
+begin
+  if lower(split_part(new.email, '@', 2)) = allowed_domain
+     or exists (select 1 from public.allowed_emails where lower(email) = lower(new.email)) then
+    return new;
+  end if;
+  raise exception 'This email is not authorized to use this app.';
+end $$;
+
+drop trigger if exists enforce_allowed_signup on auth.users;
+create trigger enforce_allowed_signup
+  before insert on auth.users
+  for each row execute function public.enforce_allowed_signup();
