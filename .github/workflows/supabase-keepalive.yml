@@ -1,0 +1,36 @@
+name: Supabase keep-alive
+
+# Supabase pauses free projects after 7 days with no activity (data is NOT lost,
+# but the project must be restarted). This pings the database every 3 days so the
+# project never goes idle long enough to pause — even over holidays.
+#
+# Setup (one time):
+#   GitHub repo -> Settings -> Secrets and variables -> Actions -> New secret
+#     SUPABASE_URL       = https://YOUR-PROJECT-ref.supabase.co
+#     SUPABASE_ANON_KEY  = your anon public key
+#
+# You can also trigger it manually from the Actions tab (Run workflow).
+
+on:
+  schedule:
+    - cron: "0 9 */3 * *"   # every 3 days at 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST endpoint
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_ANON_KEY }}" ]; then
+            echo "Missing SUPABASE_URL or SUPABASE_ANON_KEY secret — skipping."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/settings?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "Supabase responded with HTTP $code"
+          # 200 (rows) or 401/403 (RLS) all prove the project is awake.
+          if [ "$code" = "000" ]; then echo "No response from Supabase"; exit 1; fi
+          echo "Project is awake."
