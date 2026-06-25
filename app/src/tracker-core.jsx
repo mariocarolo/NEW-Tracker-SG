@@ -3,6 +3,8 @@
 // Only the data layer (auth + Supabase store + App shell) at the bottom is new.
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import html2canvas from "html2canvas";
 import { supabase } from "./supabase.js";
 
 /* ============================== CSS ============================== */
@@ -114,6 +116,7 @@ const CSS = `
 .pm .cp-pic { width:168px; flex-shrink:0; }
 .pm .cp-pic .ppick { min-width:0; }
 .pm .cp-pic .ppick-input { font-size:11px; padding:4px 7px; }
+.pm .ball-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; display:inline-block; }
 .pm .icon-btn { color:var(--idle); display:flex; padding:4px; border-radius:5px; transition:color .12s,background .12s; }
 .pm .icon-btn:hover { color:var(--block); background:#fff; }
 
@@ -435,6 +438,15 @@ function cpHealth(cp) {
   return { key: "stopped", label: "Stopped", color: "#bf3b34" };
 }
 
+// Shared "ball" fill color: grey if the topic hasn't started, green when done,
+// otherwise the checkpoint health color (On Track / Delayed / Stopped).
+function ballColor(cp, topic) {
+  if (cp && cp.done) return "var(--done)";
+  if (topic && !topic.start) return "#9aa0a6";
+  const h = cpHealth(cp);
+  return h ? h.color : "#9aa0a6";
+}
+
 // The topic target date is ALWAYS the latest checkpoint date (auto, not editable).
 function computeDue(item) {
   const dates = (item.checkpoints || []).map((c) => c.date).filter(Boolean);
@@ -634,9 +646,26 @@ function diffActivity(oldD, nextD) {
         ? ev("owner", it.title, `“${it.title}”: unassigned`)
         : ev("owner", it.title, `Assigned “${it.title}” to ${assignLabel(it)}`));
     }
+    // topic start date altered
+    if ((ot.start || "") !== (it.start || "")) {
+      out.push(ev("date", it.title, it.start
+        ? `Start date for “${it.title}” set to ${fmtShort(it.start)}`
+        : `Start date for “${it.title}” cleared`));
+    }
+    // checkpoint-level changes: concluded checkpoints and altered dates
+    const oldCps = {};
+    (ot.checkpoints || []).forEach((c) => { oldCps[c.id] = c; });
+    (it.checkpoints || []).forEach((c) => {
+      const oc = oldCps[c.id]; if (!oc) return;
+      if (!oc.done && c.done) out.push(ev("cp_done", it.title, `Checkpoint “${c.label}” concluded in “${it.title}”`));
+      if ((oc.date || "") !== (c.date || "")) out.push(ev("date", it.title, `Date for “${c.label}” changed to ${fmtShort(c.date)} in “${it.title}”`));
+    });
   });
   return out;
 }
+
+// Recent Activity shows only: concluded topics, concluded checkpoints, altered dates.
+const ACTIVITY_SHOWN = new Set(["done", "cp_done", "date"]);
 
 /* ---- history: weekly progress snapshots ---- */
 function weekKey(isoDate) {
@@ -728,6 +757,17 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
   const setCp = (cid, patch) =>
     set({ checkpoints: item.checkpoints.map((c) => (c.id === cid ? { ...c, ...patch } : c)) });
 
+  // Assigning a PIC to a topic that had none cascades to checkpoints that have
+  // no owner yet. If the topic already had a PIC, checkpoint owners are kept.
+  const setOwner = (v) => {
+    const hadPic = !!(item.owner && item.owner.trim());
+    if (!hadPic && v && v.trim()) {
+      set({ owner: v, checkpoints: item.checkpoints.map((c) => (c.pic && c.pic.trim() ? c : { ...c, pic: v })) });
+    } else {
+      set({ owner: v });
+    }
+  };
+
   return (
     <div className="init">
       <div className="init-head" onClick={() => setOpen((o) => !o)}>
@@ -741,8 +781,8 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
               : <span><Calendar size={11} style={{ verticalAlign: -1 }} /> due {fmtShort(item.due)}</span>}
           </div>
         </div>
-        <span className="rag-dot" style={{ background: rg.c }}
-          title={`Health: ${rg.l}${item.status !== "done" && health !== "green" ? " — " + healthReason(item) : ""}${item.health && item.health !== "auto" ? " (manual)" : ""}`} />
+        <span className="rag-dot" style={{ background: item.status === "not_started" ? "#9aa0a6" : rg.c }}
+          title={`Health: ${item.status === "not_started" ? "Not started" : rg.l}${item.status !== "done" && item.status !== "not_started" && health !== "green" ? " — " + healthReason(item) : ""}`} />
         <div className="bar mini-bar"><i style={{ width: `${pct}%`, background: color }} /></div>
         <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16" }}>{st.l}</span>
         <button className="icon-btn" title="Move to Deleted"
@@ -754,9 +794,15 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
       {open && (
         <div className="detail" onClick={(e) => e.stopPropagation()}>
           <div className="field-row">
+            <div className="field" style={{ flexBasis: "100%" }}>
+              <label>Topic name</label>
+              <input value={item.title} placeholder="Topic name…"
+                onChange={(e) => set({ title: e.target.value })}
+                style={{ width: "100%", maxWidth: 560 }} />
+            </div>
             <div className="field">
               <label>Person in charge (PIC)</label>
-              <PersonPicker value={item.owner} onChange={(v) => set({ owner: v })} placeholder="Assign PIC…" />
+              <PersonPicker value={item.owner} onChange={setOwner} placeholder="Assign PIC…" />
             </div>
             <div className="field">
               <label>Co-responsible</label>
@@ -999,7 +1045,7 @@ function Overview({ data }) {
   ragList.forEach((r) => rag[r.h]++);
   const attention = ragList.filter((r) => r.h !== "green")
     .sort((a, b) => (a.h === "red" ? 0 : 1) - (b.h === "red" ? 0 : 1));
-  const activity = (data.activity || []).slice(-15).reverse();
+  const activity = (data.activity || []).filter((a) => ACTIVITY_SHOWN.has(a.type)).slice(-15).reverse();
 
   return (
     <>
@@ -1159,7 +1205,7 @@ function Schedule({ data }) {
                     pos = Math.max(2, Math.min(98, pos));
                     return (
                       <div className={`node${cp.done ? " done" : ""}`} key={cp.id} style={{ left: `${pos}%` }} title={`${cp.label} · ${fmt(cp.date)}`}>
-                        <span className="ball" />
+                        <span className="ball" style={{ background: ballColor(cp, it), borderColor: ballColor(cp, it) }} />
                         <span className="tip">{fmtShort(cp.date)}</span>
                       </div>
                     );
@@ -1273,26 +1319,39 @@ function exportExcel(data) {
   } catch (e) { console.error("excel export failed", e); }
 }
 
-// Export a report by downloading a self-contained, print-ready HTML file.
-// (The artifact frame blocks window.print(); a downloaded page can print freely.)
-function exportReport(node, title) {
+// Export a report as a REAL .pdf file: rasterize the report DOM with html2canvas
+// then place it into a multi-page A4 PDF with jsPDF.
+async function exportReport(node, title) {
   if (!node) return;
   const safe = (title || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-  const s = "scr" + "ipt";
-  const doc = "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title + "</title><style>" + CSS + "</style></head>"
-    + "<body class=\"pm\" style=\"background:#fff;padding:24px;\">"
-    + "<div class=\"no-print\" style=\"max-width:760px;margin:0 auto 16px;\"><button class=\"btn\" onclick=\"window.print()\">Print / Save as PDF</button></div>"
-    + node.innerHTML
-    + "<" + s + ">addEventListener('load',function(){setTimeout(function(){try{window.print();}catch(e){}},400);});</" + s + ">"
-    + "</body></html>";
   try {
-    const blob = new Blob([doc], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = safe + ".html";
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 8000);
-  } catch (e) { console.error("export failed", e); }
+    const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
+    const pdf = new jsPDF({ unit: "pt", format: "a4" });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = (canvas.height * pageW) / canvas.width; // full image height scaled to page width
+    const img = canvas.toDataURL("image/png");
+    if (imgH <= pageH) {
+      pdf.addImage(img, "PNG", 0, 0, imgW, imgH);
+    } else {
+      // Slice the tall image across multiple pages by shifting it up each page.
+      let heightLeft = imgH;
+      let posY = 0;
+      pdf.addImage(img, "PNG", 0, posY, imgW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        posY -= pageH;
+        pdf.addPage();
+        pdf.addImage(img, "PNG", 0, posY, imgW, imgH);
+        heightLeft -= pageH;
+      }
+    }
+    pdf.save(safe + ".pdf");
+  } catch (e) {
+    console.error("PDF export failed", e);
+    alert("Sorry — the PDF could not be generated. Please try again.");
+  }
 }
 
 function ReportShell({ title, onClose, children }) {
@@ -1631,35 +1690,43 @@ const initials = (name) => name === "Unassigned" ? "—"
 
 function ownerView(data) {
   const today = todayISO();
-  const map = {};
-  const add = (name, it, role) => { (map[name] = map[name] || []).push({ ...it, role }); };
-  data.cats.forEach((c) => c.items.forEach((it) => {
-    const wc = { ...it, cat: c };
-    if (it.owner) add(it.owner, wc, "PIC");
-    if (it.owner2) add(it.owner2, wc, "Co");
-    if (!it.owner && !it.owner2) add("Unassigned", wc, "PIC");
-  }));
-  return Object.keys(map)
-    .sort((a, b) => a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b))
-    .map((owner) => {
-      const items = map[owner];
-      const done = items.filter((it) => it.status === "done");
-      const open = items.filter((it) => it.status !== "done");
-      const prog = weightedPct(items);
-      const overdue = items.flatMap((it) => it.checkpoints
-        .filter((cp) => !cp.done && cp.date < today)
-        .map((cp) => ({ label: cp.label, date: cp.date, topic: it.title, color: it.cat.color, late: dayDiff(cp.date, today) })))
-        .sort((a, b) => b.late - a.late);
-      const upcoming = items.flatMap((it) => it.checkpoints
-        .filter((cp) => !cp.done && cp.date >= today)
-        .map((cp) => ({ label: cp.label, date: cp.date, topic: it.title, color: it.cat.color })))
-        .sort((a, b) => a.date.localeCompare(b.date));
-      return { owner, items, done, open, prog, overdue, upcoming };
-    });
+  const allTopics = data.cats.flatMap((c) => c.items.map((it) => ({ ...it, cat: c })));
+  const byDate = (a, b) => (a.cp.date || "").localeCompare(b.cp.date || "");
+
+  // Everyone who is a topic PIC/Co OR owns a checkpoint shows up in People.
+  const names = new Set();
+  allTopics.forEach((it) => {
+    if (it.owner) names.add(it.owner);
+    if (it.owner2) names.add(it.owner2);
+    it.checkpoints.forEach((cp) => { if (cp.pic) names.add(cp.pic); });
+  });
+
+  return [...names].sort((a, b) => a.localeCompare(b)).map((person) => {
+    // In scope = topics where the person is PIC or Co-responsible.
+    const items = allTopics
+      .filter((it) => it.owner === person || it.owner2 === person)
+      .map((it) => ({ ...it, role: it.owner === person ? "PIC" : "Co" }));
+    const done = items.filter((it) => it.status === "done");
+    const open = items.filter((it) => it.status !== "done");
+    const prog = weightedPct(items);
+
+    // Checkpoints this person personally owns (across ALL topics).
+    const owned = allTopics.flatMap((it) =>
+      it.checkpoints.filter((cp) => cp.pic === person && !cp.done).map((cp) => ({ cp, topic: it })));
+    const yourNext = [...owned].sort(byDate).slice(0, 8);
+    const overdue = owned.filter((o) => o.cp.date && o.cp.date < today)
+      .sort((a, b) => dayDiff(b.cp.date, today) - dayDiff(a.cp.date, today));
+
+    // Checkpoints in the person's topics that are owned by someone else.
+    const otherCps = items.flatMap((it) =>
+      it.checkpoints.filter((cp) => !cp.done && cp.pic && cp.pic !== person).map((cp) => ({ cp, topic: it })))
+      .sort(byDate).slice(0, 8);
+
+    return { owner: person, items, done, open, prog, overdue, yourNext, otherCps };
+  });
 }
 
 function OwnerCard({ o }) {
-  const upcoming = o.upcoming.slice(0, 5);
   return (
     <div className="sec">
       <div className="sec-head">
@@ -1676,31 +1743,41 @@ function OwnerCard({ o }) {
           <span className="k"><b style={{ color: o.overdue.length ? "var(--block)" : "var(--ink)" }}>{o.overdue.length}</b>Overdue</span>
         </div>
 
-        {o.overdue.length > 0 && <>
-          <div className="person-sub"><AlertTriangle size={13} style={{ color: "var(--block)" }} /> Needs attention now</div>
-          {o.overdue.map((cp, i) => (
-            <div className="prow" key={i}>
-              <span className="swatch" style={{ background: cp.color }} />
-              <span className="pt">{cp.label} <span className="tag">— {cp.topic}</span></span>
-              <span className="late">{cp.late}d late · {fmtShort(cp.date)}</span>
-            </div>
-          ))}
-        </>}
-
-        <div className="person-sub"><Clock size={13} /> Coming up next</div>
-        {upcoming.length === 0
-          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No upcoming checkpoints.</div>
-          : upcoming.map((cp, i) => (
-            <div className="prow" key={i}>
-              <span className="swatch" style={{ background: cp.color }} />
-              <span className="pt">{cp.label} <span className="tag">— {cp.topic}</span></span>
+        {/* Checkpoints this person personally owns */}
+        <div className="person-sub"><Clock size={13} /> Your Next Checkpoints</div>
+        {o.yourNext.length === 0
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No upcoming checkpoints assigned to you.</div>
+          : o.yourNext.map(({ cp, topic }) => (
+            <div className="prow" key={cp.id}>
+              <span className="ball-dot" style={{ background: ballColor(cp, topic) }} />
+              <span className="pt">{cp.label} <span className="tag">— {topic.title}</span></span>
+              <span className="tag">PIC {topic.owner || "—"}{topic.owner2 ? ` · Co ${topic.owner2}` : ""}</span>
               <span className="tag">{fmtShort(cp.date)}</span>
             </div>
           ))}
 
-        <div className="person-sub"><LayoutGrid size={13} /> In scope</div>
-        {o.items.map((it) => {
-          const st = STATUSES.find((s) => s.v === it.status);
+        {/* Checkpoints owned by others in this person's topics */}
+        <div className="person-sub"><Users size={13} /> Other Checkpoints of Your Projects</div>
+        {o.otherCps.length === 0
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints owned by others in your projects.</div>
+          : o.otherCps.map(({ cp, topic }) => {
+            const hh = cpHealth(cp);
+            return (
+              <div className="prow" key={cp.id}>
+                <span className="ball-dot" style={{ background: ballColor(cp, topic) }} />
+                <span className="pt">{cp.label} <span className="tag">— {topic.title}</span></span>
+                <span className="tag">{cp.pic}</span>
+                <span className="tag">{fmtShort(cp.date)}</span>
+                {hh && <span className="cp-health" style={{ color: hh.color, borderColor: hh.color }}>{hh.label}</span>}
+              </div>
+            );
+          })}
+
+        {/* Topics where the person is PIC or Co-responsible */}
+        <div className="person-sub"><LayoutGrid size={13} /> In Scope</div>
+        {o.items.length === 0 && <div className="prio-none" style={{ paddingLeft: 0 }}>Not PIC or Co-responsible on any topic.</div>}
+        {o.items.slice(0, 8).map((it) => {
+          const st = STATUSES.find((s) => s.v === it.status) || STATUSES[0];
           return (
             <div className="prow" key={it.id}>
               <span className="swatch" style={{ background: it.cat.color }} />
@@ -1711,17 +1788,6 @@ function OwnerCard({ o }) {
             </div>
           );
         })}
-
-        {o.done.length > 0 && <>
-          <div className="person-sub"><Trophy size={13} style={{ color: "var(--done)" }} /> Concluded</div>
-          {o.done.map((it) => (
-            <div className="prow" key={it.id}>
-              <CheckCircle2 size={14} style={{ color: "var(--done)", flexShrink: 0 }} />
-              <span className="pt">{it.title}</span>
-              <span className="tag">{it.cat.name}</span>
-            </div>
-          ))}
-        </>}
       </div>
     </div>
   );
@@ -1779,21 +1845,21 @@ function PersonReport({ owners, onClose }) {
 
           {o.overdue.length > 0 && <>
             <div className="rp-h">Overdue — needs action</div>
-            {o.overdue.map((cp, i) => (
+            {o.overdue.map(({ cp, topic }, i) => (
               <div className="rp-li" key={i}>
-                <span style={{ flex: 1 }}>{cp.label} <span className="tag">— {cp.topic}</span></span>
-                <span className="rp-late" style={{ width: 96, textAlign: "right" }}>{cp.late}d late · {fmtShort(cp.date)}</span>
+                <span style={{ flex: 1 }}>{cp.label} <span className="tag">— {topic.title}</span></span>
+                <span className="rp-late" style={{ width: 96, textAlign: "right" }}>{dayDiff(cp.date, today)}d late · {fmtShort(cp.date)}</span>
               </div>
             ))}
           </>}
 
-          <div className="rp-h">Attention next (per schedule)</div>
-          {o.upcoming.length === 0 ? <div className="rp-empty">No upcoming checkpoints scheduled.</div>
-            : o.upcoming.slice(0, 8).map((cp, i) => (
+          <div className="rp-h">Your next checkpoints</div>
+          {o.yourNext.length === 0 ? <div className="rp-empty">No upcoming checkpoints assigned to you.</div>
+            : o.yourNext.map(({ cp, topic }, i) => (
               <div className="rp-li" key={i}>
                 <span className="tag" style={{ width: 64 }}>{fmtShort(cp.date)}</span>
                 <span style={{ flex: 1 }}>{cp.label}</span>
-                <span className="tag">{cp.topic}</span>
+                <span className="tag">{topic.title}</span>
               </div>
             ))}
 
@@ -2067,12 +2133,14 @@ function useTracker(currentEmail) {
   const update = useCallback((fn) => {
     const prev = dataRef.current;
     if (!prev) return;
-    const next0 = fn(prev);
-    const events = diffActivity(prev, next0);
+    // Recompute derived fields (status/target) FIRST so activity reflects them
+    // (e.g. a topic auto-reaching Done is logged as a concluded topic).
+    const derived = recomputeDerived(fn(prev));
+    const events = diffActivity(prev, derived);
     const merged = events.length
-      ? { ...next0, activity: [...(next0.activity || []), ...events].slice(-MAX_ACTIVITY) }
-      : next0;
-    const final = withSnapshot(recomputeDerived(merged));
+      ? { ...derived, activity: [...(derived.activity || []), ...events].slice(-MAX_ACTIVITY) }
+      : derived;
+    const final = withSnapshot(merged);
     setData(final);                       // optimistic, instant UI
     persistDiff(prev, final)              // durable write to Postgres
       .then((touched) => { touched.forEach((id) => editRef.current.set(id, Date.now())); setSavedAt(Date.now()); })
