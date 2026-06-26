@@ -1538,7 +1538,7 @@ function PendingReport({ data, onClose }) {
   // overdue checkpoints, grouped by owner
   const rows = all.flatMap((it) =>
     it.checkpoints.filter((cp) => !cp.done && cp.date < today).map((cp) => ({
-      owner: assignLabel(it), topic: it.title, ws: it.cat.name,
+      owner: cp.pic || "Unassigned", topic: it.title, ws: it.cat.name,
       label: cp.label, date: cp.date, late: dayDiff(cp.date, today),
     }))
   );
@@ -1557,7 +1557,7 @@ function PendingReport({ data, onClose }) {
 
   const dueSoon = all.flatMap((it) => it.checkpoints
     .filter((cp) => !cp.done && cp.date >= today && dayDiff(today, cp.date) <= 7)
-    .map((cp) => ({ date: cp.date, label: cp.label, topic: it.title, owner: assignLabel(it) })))
+    .map((cp) => ({ date: cp.date, label: cp.label, topic: it.title, owner: cp.pic || "Unassigned" })))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return (
