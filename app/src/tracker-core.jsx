@@ -3,8 +3,6 @@
 // Only the data layer (auth + Supabase store + App shell) at the bottom is new.
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
 import { supabase } from "./supabase.js";
 
 /* ============================== CSS ============================== */
@@ -173,9 +171,9 @@ const CSS = `
 .pm .overdue { color:var(--block) !important; }
 
 /* schedule */
-.pm .phase { margin-top:26px; }
-.pm .phase-head { display:flex; align-items:baseline; gap:12px; margin-bottom:12px; }
-.pm .phase-head h2 { font-size:18px; }
+.pm .phase { margin-top:20px; }
+.pm .phase-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.pm .phase-head h2 { font-size:14px; font-weight:700; letter-spacing:.02em; }
 .pm .phase-head .span { font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--ink-soft); }
 .pm .rail-row { display:flex; align-items:center; gap:16px; padding:12px 16px; border-top:1px solid var(--line-soft); }
 .pm .rail-row:first-of-type { border-top:none; }
@@ -443,15 +441,36 @@ const PEOPLE = [
   "Luiza de Munno", "Manoel Tavares", "Marcos Tage", "Mario Carolo", "Pedro Aranha",
 ].sort((a, b) => a.localeCompare(b));
 
+// Shared status/health colors used everywhere for consistency.
+const HEALTH = {
+  gray:   "#9aa0a6", // Not started
+  green:  "#3f7d4e", // On Track
+  orange: "#e08327", // Delayed
+  red:    "#bf3b34", // Stopped
+};
+
 // Automated checkpoint health, derived from the checkpoint date vs today.
 // Done checkpoints are concluded and have no health badge.
 function cpHealth(cp) {
   if (!cp || cp.done || !cp.date) return null;
   const gap = dayGap(todayISO(), cp.date); // >0 future, <0 past
-  if (gap >= 0) return { key: "on_track", label: "On Track", color: "#3f7d4e" };
+  if (gap >= 0) return { key: "on_track", label: "On Track", color: HEALTH.green };
   const late = -gap;
-  if (late <= 7) return { key: "delayed", label: "Delayed", color: "#c0892b" };
-  return { key: "stopped", label: "Stopped", color: "#bf3b34" };
+  if (late <= 7) return { key: "delayed", label: "Delayed", color: HEALTH.orange };
+  return { key: "stopped", label: "Stopped", color: HEALTH.red };
+}
+
+// Topic-level ball color: Gray=Not started, Green=On Track, Orange=Delayed, Red=Stopped.
+function topicBall(it) {
+  if (!it || it.status === "not_started") return HEALTH.gray;
+  const today = todayISO();
+  const lates = (it.checkpoints || [])
+    .filter((cp) => !cp.done && cp.date && cp.date < today)
+    .map((cp) => dayGap(cp.date, today));
+  const late = lates.length ? Math.max(...lates) : 0;
+  if (late >= 8) return HEALTH.red;
+  if (late >= 1) return HEALTH.orange;
+  return HEALTH.green;
 }
 
 // Shared "ball" fill color: grey if the topic hasn't started, green when done,
@@ -784,8 +803,8 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
               : <span><Calendar size={11} style={{ verticalAlign: -1 }} /> due {fmtShort(item.due)}</span>}
           </div>
         </div>
-        <span className="rag-dot" style={{ background: item.status === "not_started" ? "#9aa0a6" : rg.c }}
-          title={`Health: ${item.status === "not_started" ? "Not started" : rg.l}${item.status !== "done" && item.status !== "not_started" && health !== "green" ? " — " + healthReason(item) : ""}`} />
+        <span className="rag-dot" style={{ background: topicBall(item) }}
+          title={`Status: ${item.status === "not_started" ? "Not started" : item.status !== "done" && health !== "green" ? healthReason(item) : rg.l}`} />
         <div className="bar mini-bar"><i style={{ width: `${pct}%`, background: color }} /></div>
         <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16" }}>{st.l}</span>
         <button className="icon-btn" title="Move to Deleted"
@@ -897,7 +916,8 @@ function Board({ data, owners, update, ask, del }) {
   const matches = (it) =>
     (q === "" || it.title.toLowerCase().includes(q.toLowerCase()) || assignLabel(it).toLowerCase().includes(q.toLowerCase())) &&
     (fStatus === "all" || it.status === fStatus) &&
-    (fOwner === "all" || it.owner === fOwner || it.owner2 === fOwner);
+    (fOwner === "all" || it.owner === fOwner || it.owner2 === fOwner ||
+      it.checkpoints.some((cp) => cp.pic === fOwner));
 
   return (
     <>
@@ -909,7 +929,7 @@ function Board({ data, owners, update, ask, del }) {
           {STATUSES.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
         </select>
         <select value={fOwner} onChange={(e) => setFOwner(e.target.value)}>
-          <option value="all">All owners</option>
+          <option value="all">All People</option>
           {owners.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </div>
@@ -1300,39 +1320,27 @@ function exportExcel(data) {
   } catch (e) { console.error("excel export failed", e); }
 }
 
-// Export a report as a REAL .pdf file: rasterize the report DOM with html2canvas
-// then place it into a multi-page A4 PDF with jsPDF.
-async function exportReport(node, title) {
+// Export a report as a self-contained, print-ready HTML file (this layout looks
+// cleaner than a rasterized PDF). The downloaded page opens ready to print, so
+// the user can also "Save as PDF" from their browser if they want.
+function exportReport(node, title) {
   if (!node) return;
   const safe = (title || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+  const s = "scr" + "ipt";
+  const doc = "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title + "</title><style>" + CSS + "</style></head>"
+    + "<body class=\"pm\" style=\"background:#fff;padding:24px;\">"
+    + "<div class=\"no-print\" style=\"max-width:760px;margin:0 auto 16px;\"><button class=\"btn\" onclick=\"window.print()\">Print / Save as PDF</button></div>"
+    + node.innerHTML
+    + "<" + s + ">addEventListener('load',function(){setTimeout(function(){try{window.print();}catch(e){}},400);});</" + s + ">"
+    + "</body></html>";
   try {
-    const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
-    const pdf = new jsPDF({ unit: "pt", format: "a4" });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgW = pageW;
-    const imgH = (canvas.height * pageW) / canvas.width; // full image height scaled to page width
-    const img = canvas.toDataURL("image/png");
-    if (imgH <= pageH) {
-      pdf.addImage(img, "PNG", 0, 0, imgW, imgH);
-    } else {
-      // Slice the tall image across multiple pages by shifting it up each page.
-      let heightLeft = imgH;
-      let posY = 0;
-      pdf.addImage(img, "PNG", 0, posY, imgW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        posY -= pageH;
-        pdf.addPage();
-        pdf.addImage(img, "PNG", 0, posY, imgW, imgH);
-        heightLeft -= pageH;
-      }
-    }
-    pdf.save(safe + ".pdf");
-  } catch (e) {
-    console.error("PDF export failed", e);
-    alert("Sorry — the PDF could not be generated. Please try again.");
-  }
+    const blob = new Blob([doc], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = safe + ".html";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+  } catch (e) { console.error("export failed", e); }
 }
 
 function ReportShell({ title, onClose, children }) {
@@ -1340,7 +1348,7 @@ function ReportShell({ title, onClose, children }) {
   return (
     <div className="report-overlay" role="dialog" aria-modal="true">
       <div className="report-toolbar no-print">
-        <button className="btn btn-light" onClick={() => exportReport(ref.current, title)}><Download size={14} /> Download / Print PDF</button>
+        <button className="btn btn-light" onClick={() => exportReport(ref.current, title)}><Download size={14} /> Download HTML</button>
         <span className="sp" />
         <button className="btn btn-light" onClick={onClose}><X size={14} /> Close</button>
       </div>
@@ -1598,6 +1606,7 @@ function CalendarView({ data }) {
   const events = useMemo(() => {
     const evs = [];
     data.cats.forEach((c) => c.items.forEach((it) => it.checkpoints.forEach((cp) => {
+      if (cp.done) return; // concluded checkpoints are hidden from the calendar
       evs.push({ date: cp.date, label: cp.label, topic: it.title, color: c.color, done: cp.done });
     })));
     return evs;
@@ -1794,7 +1803,7 @@ function People({ data }) {
         </select>
         <span style={{ flex: 1 }} />
         <button className="btn" onClick={() => setPrinting(true)}>
-          <Printer size={14} /> Save {sel === "all" ? "all briefs" : "this brief"} as PDF
+          <Printer size={14} /> Download {sel === "all" ? "all briefs" : "this brief"} (HTML)
         </button>
       </div>
       {owners.length === 0 && <div className="empty">No topics yet — assign owners on the Board.</div>}
@@ -1811,7 +1820,7 @@ function PersonReport({ owners, onClose }) {
   return (
     <div className="report-overlay" role="dialog" aria-modal="true">
       <div className="report-toolbar no-print">
-        <button className="btn btn-light" onClick={() => exportReport(ref.current, fname)}><Download size={14} /> Download / Print PDF</button>
+        <button className="btn btn-light" onClick={() => exportReport(ref.current, fname)}><Download size={14} /> Download HTML</button>
         <span className="sp" />
         <button className="btn btn-light" onClick={onClose}><X size={14} /> Close</button>
       </div>
@@ -2314,7 +2323,9 @@ function Tracker({ session }) {
 
   const owners = useMemo(() => {
     if (!data) return [];
-    return [...new Set(data.cats.flatMap((c) => c.items.flatMap((it) => [it.owner, it.owner2])).filter(Boolean))].sort();
+    // All people connected to a topic: PIC, Co-responsible, or any checkpoint owner.
+    return [...new Set(data.cats.flatMap((c) => c.items.flatMap((it) =>
+      [it.owner, it.owner2, ...it.checkpoints.map((cp) => cp.pic)])).filter(Boolean))].sort();
   }, [data]);
 
   if (status === "loading" || !data) {
@@ -2356,15 +2367,15 @@ function Tracker({ session }) {
                     <button onClick={() => { setReport("board"); setExportOpen(false); }}>
                       <LayoutGrid size={17} style={{ marginTop: 1, color: "#b08527", flexShrink: 0 }} />
                       <span style={{ display: "flex", flexDirection: "column" }}>
-                        <span className="mt">Board (PDF)</span>
-                        <span className="md">The full board — every topic by workstream. Save as PDF.</span>
+                        <span className="mt">Board (HTML)</span>
+                        <span className="md">The full board — every topic by workstream. Downloads an HTML report.</span>
                       </span>
                     </button>
                     <button onClick={() => { setReport("mgmt"); setExportOpen(false); }}>
                       <FileText size={17} style={{ marginTop: 1, color: "#2f6b5e", flexShrink: 0 }} />
                       <span style={{ display: "flex", flexDirection: "column" }}>
-                        <span className="mt">Weekly status report</span>
-                        <span className="md">Progress summary for the whole team. Save as PDF.</span>
+                        <span className="mt">Weekly status report (HTML)</span>
+                        <span className="md">Progress summary for the whole team. Downloads an HTML report.</span>
                       </span>
                     </button>
                     <button onClick={() => { setReport("pending"); setExportOpen(false); }}>
