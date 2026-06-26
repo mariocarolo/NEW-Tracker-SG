@@ -125,6 +125,7 @@ const CSS = `
 .pm .ball-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; display:inline-block; }
 .pm .sub-note { font-weight:400; text-transform:none; letter-spacing:0; color:var(--ink-soft); font-size:10px; margin-left:6px; }
 .pm .cat-tag { background:#efeae0; border-radius:5px; }
+.pm .pending-tag { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#bf3b34; border:1px solid #bf3b34; border-radius:999px; padding:2px 8px; white-space:nowrap; }
 .pm .sch-topic { padding:10px 0; border-bottom:1px solid var(--line-soft); }
 .pm .sch-topic:last-child { border-bottom:none; }
 .pm .sch-topic-name { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin-bottom:6px; }
@@ -1713,21 +1714,29 @@ function ownerView(data) {
     const open = items.filter((it) => it.status !== "done");
     const prog = weightedPct(items);
 
-    // Only the next 21 days; no item-count limit.
+    // Show pending overdue checkpoints + upcoming ones in the next 21 days.
+    // Overdue (pending) come first (oldest first), then upcoming (date ascending).
+    // Done checkpoints are always excluded. Each section is capped at 8.
     const cutoff = iso(addDays(parse(today), 21));
-    const inWindow = (d) => d && d >= today && d <= cutoff;
+    const isPending = (d) => d && d < today;            // overdue, not done
+    const include = (d) => d && (d < today || d <= cutoff); // pending OR within 21 days
+    const tag = (o) => ({ ...o, pending: isPending(o.cp.date) });
+    const sortPendingFirst = (a, b) => {
+      if (a.pending !== b.pending) return a.pending ? -1 : 1;
+      return (a.cp.date || "").localeCompare(b.cp.date || ""); // oldest/soonest first
+    };
 
     // Checkpoints this person personally owns (across ALL topics).
     const owned = allTopics.flatMap((it) =>
       it.checkpoints.filter((cp) => cp.pic === person && !cp.done).map((cp) => ({ cp, topic: it })));
-    const yourNext = owned.filter((o) => inWindow(o.cp.date)).sort(byDate);
+    const yourNext = owned.filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst).slice(0, 8);
     const overdue = owned.filter((o) => o.cp.date && o.cp.date < today)
       .sort((a, b) => dayDiff(b.cp.date, today) - dayDiff(a.cp.date, today));
 
-    // Checkpoints in the person's topics that are owned by someone else, next 21 days.
+    // Checkpoints in the person's topics that are owned by someone else.
     const otherCps = items.flatMap((it) =>
       it.checkpoints.filter((cp) => !cp.done && cp.pic && cp.pic !== person).map((cp) => ({ cp, topic: it })))
-      .filter((o) => inWindow(o.cp.date)).sort(byDate);
+      .filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst).slice(0, 8);
 
     return { owner: person, items, done, open, prog, overdue, yourNext, otherCps };
   });
@@ -1751,24 +1760,25 @@ function OwnerCard({ o }) {
         </div>
 
         {/* Checkpoints this person personally owns */}
-        <div className="person-sub"><Clock size={13} /> Your Next Checkpoints <span className="sub-note">next 21 days</span></div>
+        <div className="person-sub"><Clock size={13} /> Your Next Checkpoints <span className="sub-note">overdue + next 21 days</span></div>
         {o.yourNext.length === 0
-          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints assigned to you in the next 21 days.</div>
-          : o.yourNext.map(({ cp, topic }) => (
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No pending or upcoming checkpoints assigned to you.</div>
+          : o.yourNext.map(({ cp, topic, pending }) => (
             <div className="prow" key={cp.id}>
               <span className="ball-dot" style={{ background: ballColor(cp, topic) }} />
               <span className="pt">{cp.label} <span className="tag">— {topic.title}</span></span>
               <span className="tag cat-tag">{cp.category || "Planning"}</span>
               <span className="tag">PIC {topic.owner || "—"}{topic.owner2 ? ` · Co ${topic.owner2}` : ""}</span>
               <span className="tag">{fmtShort(cp.date)}</span>
+              {pending && <span className="pending-tag">Pending</span>}
             </div>
           ))}
 
         {/* Checkpoints owned by others in this person's topics */}
-        <div className="person-sub"><Users size={13} /> Other Checkpoints of Your Projects <span className="sub-note">next 21 days</span></div>
+        <div className="person-sub"><Users size={13} /> Other Checkpoints of Your Projects <span className="sub-note">overdue + next 21 days</span></div>
         {o.otherCps.length === 0
-          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints owned by others in your projects in the next 21 days.</div>
-          : o.otherCps.map(({ cp, topic }) => {
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints owned by others in your projects.</div>
+          : o.otherCps.map(({ cp, topic, pending }) => {
             const hh = cpHealth(cp);
             return (
               <div className="prow" key={cp.id}>
@@ -1777,7 +1787,9 @@ function OwnerCard({ o }) {
                 <span className="tag cat-tag">{cp.category || "Planning"}</span>
                 <span className="tag">{cp.pic}</span>
                 <span className="tag">{fmtShort(cp.date)}</span>
-                {hh && <span className="cp-health" style={{ color: hh.color, borderColor: hh.color }}>{hh.label}</span>}
+                {pending
+                  ? <span className="pending-tag">Pending</span>
+                  : hh && <span className="cp-health" style={{ color: hh.color, borderColor: hh.color }}>{hh.label}</span>}
               </div>
             );
           })}
