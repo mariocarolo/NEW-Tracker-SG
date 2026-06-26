@@ -1726,17 +1726,17 @@ function ownerView(data) {
       return (a.cp.date || "").localeCompare(b.cp.date || ""); // oldest/soonest first
     };
 
-    // Checkpoints this person personally owns (across ALL topics).
+    // Checkpoints this person personally owns (across ALL topics). No item cap.
     const owned = allTopics.flatMap((it) =>
       it.checkpoints.filter((cp) => cp.pic === person && !cp.done).map((cp) => ({ cp, topic: it })));
-    const yourNext = owned.filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst).slice(0, 8);
+    const yourNext = owned.filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst);
     const overdue = owned.filter((o) => o.cp.date && o.cp.date < today)
       .sort((a, b) => dayDiff(b.cp.date, today) - dayDiff(a.cp.date, today));
 
-    // Checkpoints in the person's topics that are owned by someone else.
+    // Checkpoints in the person's topics that are owned by someone else. No item cap.
     const otherCps = items.flatMap((it) =>
       it.checkpoints.filter((cp) => !cp.done && cp.pic && cp.pic !== person).map((cp) => ({ cp, topic: it })))
-      .filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst).slice(0, 8);
+      .filter((o) => include(o.cp.date)).map(tag).sort(sortPendingFirst);
 
     return { owner: person, items, done, open, prog, overdue, yourNext, otherCps };
   });
