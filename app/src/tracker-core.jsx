@@ -232,7 +232,15 @@ const CSS = `
 .pm .rp-ws .ct { font-family:var(--mono); font-size:11px; color:var(--ink-soft); width:108px; text-align:right; }
 .pm .rp-li { padding:7px 0; border-top:1px solid var(--line-soft); font-size:13px; display:flex; gap:10px; align-items:baseline; }
 .pm .rp-li:first-of-type { border-top:none; }
-.pm .rp-li .tag { font-family:var(--mono); font-size:10px; color:var(--ink-soft); white-space:nowrap; }
+.pm .rp-li .tag { font-family:var(--mono); font-size:10px; color:var(--ink-soft); }
+/* two-line checkpoint rows for reports (name gets full width, details below) */
+.pm .rp-cp { padding:9px 0; border-top:1px solid var(--line-soft); }
+.pm .rp-cp:first-of-type { border-top:none; }
+.pm .rp-cp-main { display:flex; gap:12px; align-items:baseline; }
+.pm .rp-cp-date { font-family:var(--mono); font-size:10px; color:var(--ink-soft); width:58px; flex-shrink:0; }
+.pm .rp-cp-name { flex:1; font-size:13px; line-height:1.35; }
+.pm .rp-cp-late { font-family:var(--mono); font-size:10px; color:var(--block); white-space:nowrap; margin-left:auto; padding-left:10px; }
+.pm .rp-cp-sub { font-family:var(--mono); font-size:10.5px; color:var(--ink-soft); margin-top:4px; padding-left:70px; line-height:1.4; }
 .pm .rp-owner { margin:18px 0 4px; padding:9px 13px; background:var(--paper); border-radius:8px; display:flex; align-items:center; gap:10px; }
 .pm .rp-owner .who { font-family:var(--serif); font-size:15px; font-weight:600; flex:1; }
 .pm .rp-owner .cnt { font-family:var(--mono); font-size:11px; padding:3px 9px; border-radius:20px; background:#bf3b3416; color:var(--block); font-weight:600; }
@@ -1569,10 +1577,13 @@ function PendingReport({ data, onClose }) {
             <span className="cnt">{byOwner[o].length} overdue</span>
           </div>
           {byOwner[o].map((r, i) => (
-            <div className="rp-li" key={i}>
-              <span style={{ flex: 1 }}>{r.label} <span className="tag">— {r.topic}</span></span>
-              <span className="tag">{r.ws}</span>
-              <span className="rp-late" style={{ width: 86, textAlign: "right" }}>{r.late}d late · {fmtShort(r.date)}</span>
+            <div className="rp-cp" key={i}>
+              <div className="rp-cp-main">
+                <span className="rp-cp-date">{fmtShort(r.date)}</span>
+                <span className="rp-cp-name">{r.label}</span>
+                <span className="rp-cp-late">{r.late}d late</span>
+              </div>
+              <div className="rp-cp-sub">{r.topic} · {r.ws}</div>
             </div>
           ))}
           <p className="rp-nudge">Please update these items or flag any blocker before the next process meeting.</p>
@@ -1582,10 +1593,12 @@ function PendingReport({ data, onClose }) {
       {dueSoon.length > 0 && <>
         <div className="rp-h">Due within 7 days — heads up</div>
         {dueSoon.map((u, i) => (
-          <div className="rp-li" key={i}>
-            <span className="tag" style={{ width: 64 }}>{fmtShort(u.date)}</span>
-            <span style={{ flex: 1 }}>{u.label}</span>
-            <span className="tag">{u.topic} · {u.owner}</span>
+          <div className="rp-cp" key={i}>
+            <div className="rp-cp-main">
+              <span className="rp-cp-date">{fmtShort(u.date)}</span>
+              <span className="rp-cp-name">{u.label}</span>
+            </div>
+            <div className="rp-cp-sub">{u.topic} · {u.owner}</div>
           </div>
         ))}
       </>}
