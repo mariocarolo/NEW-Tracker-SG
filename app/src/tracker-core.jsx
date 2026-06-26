@@ -46,6 +46,14 @@ const CSS = `
 .pm .tab.on { color:var(--ink); border-bottom-color:var(--ink); }
 .pm .saved { margin-left:auto; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); display:flex; align-items:center; gap:6px; padding-bottom:9px; }
 .pm .dot-live { width:7px; height:7px; border-radius:50%; background:var(--done); }
+/* burgundy header */
+.pm .top { background:#692730 !important; border-bottom:1px solid rgba(255,255,255,.18) !important; }
+.pm .top .brand h1 { color:#ffffff; }
+.pm .top .brand .sub { color:rgba(255,255,255,.78); }
+.pm .top .tab { color:rgba(255,255,255,.82); }
+.pm .top .tab:hover { background:rgba(255,255,255,.12); color:#ffffff; }
+.pm .top .tab.on { color:#ffffff; border-bottom-color:#ffffff; background:rgba(255,255,255,.10); }
+.pm .top .saved { color:rgba(255,255,255,.8); }
 
 /* cards */
 .pm .card { background:var(--card); border:1px solid var(--line); border-radius:11px; }
@@ -58,7 +66,7 @@ const CSS = `
 
 /* progress bar */
 .pm .bar { height:7px; border-radius:4px; background:var(--line-soft); overflow:hidden; flex:1; }
-.pm .bar > i { display:block; height:100%; border-radius:4px; transition:width .4s ease; }
+.pm .bar > i { display:block; height:100%; border-radius:4px; transition:width .4s ease; background:#111 !important; }
 .pm .pct { font-family:var(--mono); font-size:11px; color:var(--ink-soft); min-width:34px; text-align:right; }
 
 /* initiative row */
@@ -117,6 +125,14 @@ const CSS = `
 .pm .cp-pic .ppick { min-width:0; }
 .pm .cp-pic .ppick-input { font-size:11px; padding:4px 7px; }
 .pm .ball-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; display:inline-block; }
+.pm .sub-note { font-weight:400; text-transform:none; letter-spacing:0; color:var(--ink-soft); font-size:10px; margin-left:6px; }
+.pm .cat-tag { background:#efeae0; border-radius:5px; }
+.pm .sch-topic { padding:10px 0; border-bottom:1px solid var(--line-soft); }
+.pm .sch-topic:last-child { border-bottom:none; }
+.pm .sch-topic-name { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin-bottom:6px; }
+.pm .sch-row { display:flex; align-items:center; gap:10px; padding:5px 0 5px 18px; flex-wrap:wrap; }
+.pm .sch-date { font-family:var(--mono); font-size:11px; color:var(--ink-soft); width:60px; flex-shrink:0; }
+.pm .sch-name { flex:1; min-width:140px; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .pm .icon-btn { color:var(--idle); display:flex; padding:4px; border-radius:5px; transition:color .12s,background .12s; }
 .pm .icon-btn:hover { color:var(--block); background:#fff; }
 
@@ -442,7 +458,7 @@ function cpHealth(cp) {
 // otherwise the checkpoint health color (On Track / Delayed / Stopped).
 function ballColor(cp, topic) {
   if (cp && cp.done) return "var(--done)";
-  if (topic && !topic.start) return "#9aa0a6";
+  if (topic && topic.status === "not_started") return "#9aa0a6";
   const h = cpHealth(cp);
   return h ? h.color : "#9aa0a6";
 }
@@ -453,12 +469,12 @@ function computeDue(item) {
   return dates.length ? dates.reduce((m, d) => (d > m ? d : m)) : (item.due || "");
 }
 
-// The topic status is ALWAYS computed from the start date + checkpoint completion.
+// The topic status is computed from checkpoint completion only.
 function computeStatus(item) {
-  if (!item.start) return "not_started";
   const cps = item.checkpoints || [];
   if (cps.length > 0 && cps.every((c) => c.done)) return "done";
-  return "in_progress";
+  if (cps.some((c) => c.done)) return "in_progress";
+  return "not_started";
 }
 
 // Normalize a single topic's derived fields (status, due, completedAt).
@@ -582,18 +598,11 @@ const dayGap = (aISO, bISO) => Math.round((parse(bISO) - parse(aISO)) / DAY);
 function autoHealth(it) {
   const today = todayISO();
   if (it.status === "done") return "green";
-  if (it.status === "not_started" || !it.start) return "green";
+  if (it.status === "not_started") return "green";
   const overdueCp = it.checkpoints.some((cp) => !cp.done && cp.date < today);
   if (overdueCp || (it.due && it.due < today)) return "red";
   const soon = it.checkpoints.some((cp) => !cp.done && cp.date >= today && dayGap(today, cp.date) <= 14);
-  const p = pctOf(it);
-  let behind = false;
-  if (it.start && it.due && it.start <= today && it.due > it.start) {
-    const total = Math.max(1, dayGap(it.start, it.due));
-    const elapsed = Math.max(0, Math.min(total, dayGap(it.start, today)));
-    behind = p < (elapsed / total) * 100 - 25;
-  }
-  if (behind || (soon && p < 50)) return "amber";
+  if (soon && pctOf(it) < 50) return "amber";
   return "green";
 }
 function healthOf(it) {
@@ -646,12 +655,6 @@ function diffActivity(oldD, nextD) {
         ? ev("owner", it.title, `“${it.title}”: unassigned`)
         : ev("owner", it.title, `Assigned “${it.title}” to ${assignLabel(it)}`));
     }
-    // topic start date altered
-    if ((ot.start || "") !== (it.start || "")) {
-      out.push(ev("date", it.title, it.start
-        ? `Start date for “${it.title}” set to ${fmtShort(it.start)}`
-        : `Start date for “${it.title}” cleared`));
-    }
     // checkpoint-level changes: concluded checkpoints and altered dates
     const oldCps = {};
     (ot.checkpoints || []).forEach((c) => { oldCps[c.id] = c; });
@@ -664,8 +667,8 @@ function diffActivity(oldD, nextD) {
   return out;
 }
 
-// Recent Activity shows only: concluded topics, concluded checkpoints, altered dates.
-const ACTIVITY_SHOWN = new Set(["done", "cp_done", "date"]);
+// Recent Activity shows only: concluded topics and concluded checkpoints.
+const ACTIVITY_SHOWN = new Set(["done", "cp_done"]);
 
 /* ---- history: weekly progress snapshots ---- */
 function weekKey(isoDate) {
@@ -811,21 +814,6 @@ function Initiative({ item, color, owners, onChange, onDelete, onDeleteCheckpoin
             <div className="field">
               <label>Status (automatic)</label>
               <span className="pill" style={{ color: st.c, borderColor: st.c, background: st.c + "16", alignSelf: "flex-start" }}>{st.l}</span>
-            </div>
-            <div className="field">
-              <label>Start date</label>
-              {item.start ? (
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <input type="date" value={item.start} onChange={(e) => set({ start: e.target.value })} />
-                  <button className="btn ghost" title="Undo start (clear start date)" onClick={() => set({ start: "" })}>
-                    <RotateCcw size={12} /> Undo
-                  </button>
-                </div>
-              ) : (
-                <button className="btn" onClick={() => set({ start: todayISO() })}>
-                  <Plus size={13} /> Start now
-                </button>
-              )}
             </div>
             <div className="field">
               <label>Target date (automatic)</label>
@@ -1032,19 +1020,22 @@ function Overview({ data }) {
   const prog = all.filter((it) => it.status === "in_progress").length;
   const overall = weightedPct(all);
 
-  const today = parse(todayISO());
+  const todayI = todayISO();
+  const today = parse(todayI);
+  // Next checkpoints: show the person responsible for the specific checkpoint.
   const upcoming = data.cats.flatMap((c) =>
     c.items.flatMap((it) => it.checkpoints.filter((cp) => !cp.done).map((cp) => ({
-      date: cp.date, label: cp.label, item: it.title, owner: assignLabel(it), color: c.color,
+      date: cp.date, label: cp.label, item: it.title, owner: cp.pic || "Unassigned", color: c.color,
       overdue: parse(cp.date) < today,
     })))
   ).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 12);
 
-  const ragList = all.map((it) => ({ it, h: healthOf(it) }));
-  const rag = { green: 0, amber: 0, red: 0 };
-  ragList.forEach((r) => rag[r.h]++);
-  const attention = ragList.filter((r) => r.h !== "green")
-    .sort((a, b) => (a.h === "red" ? 0 : 1) - (b.h === "red" ? 0 : 1));
+  // Needs attention: only Delayed (1-7 days) or Stopped (8+ days) topics, with day counts.
+  const attention = all.map((it) => {
+    const lates = it.checkpoints.filter((cp) => !cp.done && cp.date && cp.date < todayI).map((cp) => dayDiff(cp.date, todayI));
+    const late = lates.length ? Math.max(...lates) : 0;
+    return { it, late, stopped: late >= 8 };
+  }).filter((x) => x.late >= 1 && x.it.status !== "done").sort((a, b) => b.late - a.late);
   const activity = (data.activity || []).filter((a) => ACTIVITY_SHOWN.has(a.type)).slice(-15).reverse();
 
   return (
@@ -1057,31 +1048,20 @@ function Overview({ data }) {
       </div>
 
       <div className="card panel" style={{ marginTop: 18 }}>
-        <h3>Health (RAG)</h3>
-        <div className="ph">Auto-derived from the schedule · {rag.red} off track, {rag.amber} at risk, {rag.green} on track</div>
-        <div className="rag-bar">
-          {["green", "amber", "red"].map((k) => rag[k] > 0 && (
-            <div key={k} style={{ width: `${(rag[k] / total) * 100}%`, background: RAG[k].c }} title={`${rag[k]} ${RAG[k].l}`} />
+        <h3>Needs Attention</h3>
+        <div className="ph">Topics with overdue checkpoints — Delayed (1–7 days) or Stopped (8+ days)</div>
+        {attention.length === 0
+          ? <div className="empty" style={{ padding: 18 }}>Nothing delayed or stopped.</div>
+          : attention.map(({ it, late, stopped }) => (
+            <div className="prow" key={it.id}>
+              <span className="ball-dot" style={{ background: stopped ? "#bf3b34" : "#c0892b" }} />
+              <span className="pt">{it.title}</span>
+              <span className="cp-health" style={{ color: stopped ? "#bf3b34" : "#c0892b", borderColor: stopped ? "#bf3b34" : "#c0892b" }}>
+                {late} day{late === 1 ? "" : "s"} {stopped ? "stopped" : "delayed"}
+              </span>
+              <span className="tag">{assignLabel(it)}</span>
+            </div>
           ))}
-        </div>
-        <div className="rag-counts">
-          {["red", "amber", "green"].map((k) => (
-            <span key={k} className="rag-count"><span className="rag-dot" style={{ background: RAG[k].c }} /> <b>{rag[k]}</b> {RAG[k].l}</span>
-          ))}
-        </div>
-        {attention.length > 0 && (
-          <div style={{ marginTop: 6 }}>
-            <div className="person-sub" style={{ marginTop: 14 }}>Needs attention</div>
-            {attention.map(({ it, h }) => (
-              <div className="prow" key={it.id}>
-                <span className="rag-dot" style={{ background: RAG[h].c }} />
-                <span className="pt">{it.title}</span>
-                <span className="tag">{healthReason(it)}</span>
-                <span className="tag">{assignLabel(it)}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <div className="card panel" style={{ marginTop: 18 }}>
@@ -1169,53 +1149,54 @@ function Overview({ data }) {
   );
 }
 function Schedule({ data }) {
-  // Global time window spanning the plan start and every checkpoint date.
-  const allDates = data.cats.flatMap((c) => c.items.flatMap((it) => it.checkpoints.map((cp) => cp.date))).filter(Boolean);
-  const planStart = parse(data.start);
-  let startD = planStart, endD = addMonths(planStart, 3);
-  if (allDates.length) {
-    const minISO = allDates.reduce((m, d) => (d < m ? d : m));
-    const maxISO = allDates.reduce((m, d) => (d > m ? d : m));
-    startD = parse(minISO) < planStart ? parse(minISO) : planStart;
-    endD = parse(maxISO) > endD ? parse(maxISO) : endD;
-  }
-  const span = Math.max(1, endD.getTime() - startD.getTime());
+  // Only the next 2 months from today. Listed (not a cramped rail) so checkpoint
+  // names, dates and owners never overlap, however many fall in the window.
+  const today = todayISO();
+  const cutoff = iso(addMonths(parse(today), 2));
+  const inWindow = (d) => d && d >= today && d <= cutoff;
 
   return (
     <>
       <div className="toolbar"><span className="ph" style={{ marginTop: 4 }}>
-        Timeline of every checkpoint by workstream, from {fmt(iso(startD))} to {fmt(iso(endD))}.
+        Timeline for the next 2 months of every checkpoint by workstream
       </span></div>
-      {data.cats.map((cat) => (
-        <div className="phase" key={cat.id}>
-          <div className="phase-head">
-            <span className="swatch" style={{ background: cat.color }} />
-            <h2>{cat.name}</h2>
-            <span className="span">{cat.items.length} topics</span>
-          </div>
-          <div className="card">
-            {cat.items.length === 0 && <div className="empty">No topics in this workstream.</div>}
-            {cat.items.map((it) => (
-              <div className="rail-row" key={it.id}>
-                <div className="rail-label"><span className="swatch" style={{ background: cat.color }} />{it.title}</div>
-                <div className="rail">
-                  <div className="rail-line" />
-                  {it.checkpoints.map((cp) => {
-                    let pos = ((parse(cp.date).getTime() - startD.getTime()) / span) * 100;
-                    pos = Math.max(2, Math.min(98, pos));
+      {data.cats.map((cat) => {
+        const rows = cat.items
+          .map((it) => ({ it, cps: it.checkpoints.filter((cp) => inWindow(cp.date)).sort((a, b) => (a.date || "").localeCompare(b.date || "")) }))
+          .filter((r) => r.cps.length > 0);
+        return (
+          <div className="phase" key={cat.id}>
+            <div className="phase-head">
+              <span className="swatch" style={{ background: cat.color }} />
+              <h2>{cat.name}</h2>
+              <span className="span">{rows.reduce((n, r) => n + r.cps.length, 0)} checkpoints</span>
+            </div>
+            <div className="card">
+              {rows.length === 0 && <div className="empty">No checkpoints in the next 2 months.</div>}
+              {rows.map(({ it, cps }) => (
+                <div className="sch-topic" key={it.id}>
+                  <div className="sch-topic-name"><span className="swatch" style={{ background: cat.color }} />{it.title}</div>
+                  {cps.map((cp) => {
+                    const h = cpHealth(cp);
                     return (
-                      <div className={`node${cp.done ? " done" : ""}`} key={cp.id} style={{ left: `${pos}%` }} title={`${cp.label} · ${fmt(cp.date)}`}>
-                        <span className="ball" style={{ background: ballColor(cp, it), borderColor: ballColor(cp, it) }} />
-                        <span className="tip">{fmtShort(cp.date)}</span>
+                      <div className="sch-row" key={cp.id}>
+                        <span className="ball-dot" style={{ background: ballColor(cp, it) }} />
+                        <span className="sch-date">{fmtShort(cp.date)}</span>
+                        <span className="sch-name" title={cp.label}>{cp.label}</span>
+                        <span className="tag cat-tag">{cp.category || "Planning"}</span>
+                        <span className="tag">{cp.pic || "Unassigned"}</span>
+                        {cp.done
+                          ? <span className="cp-health" style={{ color: "var(--done)", borderColor: "var(--done)" }}>Done</span>
+                          : h && <span className="cp-health" style={{ color: h.color, borderColor: h.color }}>{h.label}</span>}
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -1710,17 +1691,21 @@ function ownerView(data) {
     const open = items.filter((it) => it.status !== "done");
     const prog = weightedPct(items);
 
+    // Only the next 21 days; no item-count limit.
+    const cutoff = iso(addDays(parse(today), 21));
+    const inWindow = (d) => d && d >= today && d <= cutoff;
+
     // Checkpoints this person personally owns (across ALL topics).
     const owned = allTopics.flatMap((it) =>
       it.checkpoints.filter((cp) => cp.pic === person && !cp.done).map((cp) => ({ cp, topic: it })));
-    const yourNext = [...owned].sort(byDate).slice(0, 8);
+    const yourNext = owned.filter((o) => inWindow(o.cp.date)).sort(byDate);
     const overdue = owned.filter((o) => o.cp.date && o.cp.date < today)
       .sort((a, b) => dayDiff(b.cp.date, today) - dayDiff(a.cp.date, today));
 
-    // Checkpoints in the person's topics that are owned by someone else.
+    // Checkpoints in the person's topics that are owned by someone else, next 21 days.
     const otherCps = items.flatMap((it) =>
       it.checkpoints.filter((cp) => !cp.done && cp.pic && cp.pic !== person).map((cp) => ({ cp, topic: it })))
-      .sort(byDate).slice(0, 8);
+      .filter((o) => inWindow(o.cp.date)).sort(byDate);
 
     return { owner: person, items, done, open, prog, overdue, yourNext, otherCps };
   });
@@ -1744,28 +1729,30 @@ function OwnerCard({ o }) {
         </div>
 
         {/* Checkpoints this person personally owns */}
-        <div className="person-sub"><Clock size={13} /> Your Next Checkpoints</div>
+        <div className="person-sub"><Clock size={13} /> Your Next Checkpoints <span className="sub-note">next 21 days</span></div>
         {o.yourNext.length === 0
-          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No upcoming checkpoints assigned to you.</div>
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints assigned to you in the next 21 days.</div>
           : o.yourNext.map(({ cp, topic }) => (
             <div className="prow" key={cp.id}>
               <span className="ball-dot" style={{ background: ballColor(cp, topic) }} />
               <span className="pt">{cp.label} <span className="tag">— {topic.title}</span></span>
+              <span className="tag cat-tag">{cp.category || "Planning"}</span>
               <span className="tag">PIC {topic.owner || "—"}{topic.owner2 ? ` · Co ${topic.owner2}` : ""}</span>
               <span className="tag">{fmtShort(cp.date)}</span>
             </div>
           ))}
 
         {/* Checkpoints owned by others in this person's topics */}
-        <div className="person-sub"><Users size={13} /> Other Checkpoints of Your Projects</div>
+        <div className="person-sub"><Users size={13} /> Other Checkpoints of Your Projects <span className="sub-note">next 21 days</span></div>
         {o.otherCps.length === 0
-          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints owned by others in your projects.</div>
+          ? <div className="prio-none" style={{ paddingLeft: 0 }}>No checkpoints owned by others in your projects in the next 21 days.</div>
           : o.otherCps.map(({ cp, topic }) => {
             const hh = cpHealth(cp);
             return (
               <div className="prow" key={cp.id}>
                 <span className="ball-dot" style={{ background: ballColor(cp, topic) }} />
                 <span className="pt">{cp.label} <span className="tag">— {topic.title}</span></span>
+                <span className="tag cat-tag">{cp.category || "Planning"}</span>
                 <span className="tag">{cp.pic}</span>
                 <span className="tag">{fmtShort(cp.date)}</span>
                 {hh && <span className="cp-health" style={{ color: hh.color, borderColor: hh.color }}>{hh.label}</span>}
@@ -2340,25 +2327,6 @@ function Tracker({ session }) {
     return <div className="pm"><style>{CSS}</style><div className="connect-wrap"><div className="connect-card"><h1>Operating Plan</h1><p className="connect-text">The database has no data yet. Run <code>supabase/schema.sql</code> then <code>supabase/seed.sql</code> in the Supabase SQL editor to load the starting plan.</p></div></div></div>;
   }
 
-  const setStart = (s) => {
-    ask(`Regenerate all suggested dates from ${fmtShort(s)}? Owners, statuses, notes and history are kept; checkpoint dates are recomputed.`, () => {
-      update((d) => {
-        const fresh = buildSeed(s);
-        return withSnapshot({
-          ...fresh, history: d.history,
-          activity: [...(d.activity || []), ev("date", "", `Plan start set to ${fmtShort(s)}; suggested dates regenerated`)].slice(-MAX_ACTIVITY),
-          cats: fresh.cats.map((fc, ci) => ({
-            ...fc, id: d.cats[ci]?.id || fc.id,
-            items: fc.items.map((fi, ii) => {
-              const old = d.cats[ci]?.items[ii];
-              return old ? { ...fi, id: old.id, owner: old.owner, owner2: old.owner2 || "", status: old.status, notes: old.notes, completedAt: old.completedAt, health: old.health } : fi;
-            }),
-          })),
-        });
-      });
-    }, { confirmLabel: "Regenerate dates" });
-  };
-
   const userLabel = session?.user?.email || "signed in";
 
   return (
@@ -2371,10 +2339,6 @@ function Tracker({ session }) {
           <div className="brand">
             <h1>Operating Plan</h1>
             <span className="sub">Implementation Tracker</span>
-            <div className="startbar">
-              <span>Plan start</span>
-              <input type="date" value={data.start} onChange={(e) => setStart(e.target.value)} />
-            </div>
           </div>
           <div className="tabs">
             <button className={`tab${tab === "overview" ? " on" : ""}`} onClick={() => setTab("overview")}><Gauge size={15} /> Overview</button>
